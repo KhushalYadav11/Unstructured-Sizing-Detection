@@ -55,13 +55,13 @@ export function CreateProjectDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="model-file">3D Model File (.obj)</Label>
+            <Label htmlFor="model-file">3D Model File (.obj/.stl/.gltf/.glb)</Label>
             <div className="border-2 border-dashed rounded-md p-6 text-center hover-elevate">
               <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
               <Input
                 id="model-file"
                 type="file"
-                accept=".obj"
+                accept=".obj,.stl,.gltf,.glb"
                 onChange={(e) => setFiles(e.target.files)}
                 className="hidden"
                 data-testid="input-model-file"
@@ -70,7 +70,7 @@ export function CreateProjectDialog({
                 htmlFor="model-file"
                 className="cursor-pointer text-sm text-muted-foreground"
               >
-                {files ? `${files.length} file(s) selected` : "Click to upload .obj file"}
+                {files ? `${files.length} file(s) selected` : "Click to upload .obj/.stl/.gltf/.glb file"}
               </Label>
             </div>
           </div>

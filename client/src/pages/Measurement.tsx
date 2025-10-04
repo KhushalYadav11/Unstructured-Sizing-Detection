@@ -162,6 +162,14 @@ export default function Measurement() {
             modelLoaded={true}
             measurementMode={measurementMode}
             onMeasurementToggle={() => setMeasurementMode(!measurementMode)}
+            onModelMetrics={(m) =>
+              setDimensions({
+                length: m.dimensions.length,
+                width: m.dimensions.width,
+                height: m.dimensions.height,
+                unit: "meters",
+              })
+            }
           />
         </div>
 
