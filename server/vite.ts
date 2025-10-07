@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 // Inline minimal Vite config to avoid dynamic import of missing file
@@ -8,8 +9,8 @@ const inlineViteConfig = {
   plugins: [],
   resolve: {
     alias: {
-      "@": path.resolve(import.meta.dirname, "..", "client", "src"),
-      "@shared": path.resolve(import.meta.dirname, "..", "shared"),
+      "@": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "client", "src"),
+      "@shared": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "shared"),
     },
   },
 };
@@ -38,13 +39,8 @@ export async function setupVite(app: Express, server: Server) {
   const vite = await createViteServer({
     ...inlineViteConfig,
     configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      },
-    },
+    customLogger: viteLogger,
+    root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "client"),
     server: serverOptions,
     appType: "custom",
   });
@@ -55,7 +51,7 @@ export async function setupVite(app: Express, server: Server) {
 
     try {
       const clientTemplate = path.resolve(
-        import.meta.dirname,
+        path.dirname(fileURLToPath(import.meta.url)),
         "..",
         "client",
         "index.html",
@@ -77,7 +73,13 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(import.meta.dirname, "public");
+  // Serve the client build from ../dist/public relative to this file
+  const distPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "dist",
+    "public",
+  );
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
