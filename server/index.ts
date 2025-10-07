@@ -34,10 +34,16 @@ app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 
 // Basic rate limiting (in production, use redis-based rate limiting)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests per window
+const isDevelopment = process.env.NODE_ENV === 'development';
+const RATE_LIMIT_WINDOW = isDevelopment ? 1 * 60 * 1000 : 15 * 60 * 1000; // 1 minute in dev, 15 minutes in prod
+const RATE_LIMIT_MAX_REQUESTS = isDevelopment ? 1000 : 100; // 1000 requests in dev, 100 in prod
 
 app.use((req, res, next) => {
+  // Skip rate limiting for static assets in development
+  if (isDevelopment && (req.path.includes('.') || req.path.startsWith('/src/') || req.path.startsWith('/@'))) {
+    return next();
+  }
+  
   const clientId = req.ip || 'unknown';
   const now = Date.now();
   const clientData = rateLimitMap.get(clientId);

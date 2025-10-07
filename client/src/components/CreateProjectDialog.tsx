@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -26,12 +26,27 @@ export function CreateProjectDialog({
   const [name, setName] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
 
+  // Reset form when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setName("");
+      setFiles(null);
+    }
+  }, [open]);
+
   const handleSubmit = () => {
+    if (!name.trim()) {
+      return; // Let parent handle validation and show toast
+    }
+    
+    if (!files || files.length === 0) {
+      return; // Let parent handle validation and show toast
+    }
+    
     onSubmit?.({ name, files });
     console.log("Project created:", { name, fileCount: files?.length });
     setName("");
     setFiles(null);
-    onOpenChange(false);
   };
 
   return (

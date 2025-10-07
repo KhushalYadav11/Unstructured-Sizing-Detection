@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-// Removed replit-specific plugins to simplify dev and avoid warnings
 
 export default defineConfig({
   plugins: [
@@ -25,4 +24,4 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
-});
+  });

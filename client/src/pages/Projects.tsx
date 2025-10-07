@@ -103,7 +103,25 @@ export default function Projects() {
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
         onSubmit={(data) => {
-          createMutation.mutate({ name: data.name, status: "draft" });
+          if (!data.name.trim()) {
+            toast({
+              title: "Error",
+              description: "Please enter a project name.",
+              variant: "destructive",
+            });
+            return;
+          }
+          
+          if (!data.files || data.files.length === 0) {
+            toast({
+              title: "Error", 
+              description: "Please upload a 3D model file.",
+              variant: "destructive",
+            });
+            return;
+          }
+          
+          createMutation.mutate({ name: data.name.trim(), status: "draft" });
         }}
       />
     </div>
