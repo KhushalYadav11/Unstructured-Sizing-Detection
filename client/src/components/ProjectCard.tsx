@@ -1,7 +1,7 @@
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Folder, Calendar, TrendingUp, MoreVertical } from "lucide-react";
+import { Folder, Calendar, TrendingUp, MoreVertical, Box } from "lucide-react";
 
 interface ProjectCardProps {
   id: string;
@@ -12,6 +12,9 @@ interface ProjectCardProps {
   volume?: number;
   weight?: number;
   onClick?: () => void;
+  has3DModels?: boolean;
+  project: Project;
+  stats?: ProjectStats;
 }
 
 const statusConfig = {
@@ -21,6 +24,7 @@ const statusConfig = {
 };
 
 export function ProjectCard({
+  id,
   name,
   status,
   measurements,
@@ -28,6 +32,7 @@ export function ProjectCard({
   volume,
   weight,
   onClick,
+  has3DModels,
 }: ProjectCardProps) {
   return (
     <Card
@@ -44,6 +49,12 @@ export function ProjectCard({
             <h3 className="font-semibold truncate" data-testid="text-project-name">
               {name}
             </h3>
+            {has3DModels && (
+              <div className="flex items-center gap-1 text-xs text-primary">
+                <Cube className="h-3 w-3" />
+                <span>3D Analysis Available</span>
+              </div>
+            )}
           </div>
         </div>
         <Button
@@ -90,11 +101,25 @@ export function ProjectCard({
           </div>
         )}
       </CardContent>
-      <CardFooter className="pt-3 border-t">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <CardFooter className="pt-0 pb-3 px-6 flex justify-between items-center">
+        <div className="flex items-center text-xs text-muted-foreground gap-1">
           <Calendar className="h-3 w-3" />
           <span data-testid="text-last-updated">Updated {lastUpdated}</span>
         </div>
+        {has3DModels && (
+          <Button 
+            size="sm" 
+            variant="outline"
+            className="text-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.location.href = `/mesh-analysis?project=${id}`;
+            }}
+          >
+            <Box className="h-3 w-3 mr-1" />
+            3D View
+          </Button>
+        )}
       </CardFooter>
     </Card>
   );

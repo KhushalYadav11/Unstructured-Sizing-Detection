@@ -142,6 +142,9 @@ function ProjectCardWithStats({
     queryFn: () => getProjectStats(project.id),
   });
 
+  // Check if project has 3D models
+  const has3DModels = stats?.measurements?.some(m => m.type === '3d_model') || false;
+
   return (
     <ProjectCard
       id={project.id}
@@ -151,6 +154,7 @@ function ProjectCardWithStats({
       lastUpdated={lastUpdated}
       volume={stats?.totalVolume}
       weight={stats?.totalWeight}
+      has3DModels={has3DModels}
       onClick={onClick}
     />
   );

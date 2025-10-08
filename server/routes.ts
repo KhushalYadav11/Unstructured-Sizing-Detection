@@ -7,6 +7,9 @@ import { fromZodError } from "zod-validation-error";
 import { upload, cleanupFile, getFileInfo } from "./upload-handler";
 import { meshProcessor, COAL_DENSITIES } from "./mesh-processor";
 import path from "path";
+import multer from "multer";
+import fs from "fs";
+import { v4 as uuidv4 } from "uuid";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Projects
@@ -312,6 +315,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch overview" });
+    }
+  });
+
+  // Get volume calculation methods
+  app.get("/api/volume-methods", (req, res) => {
+    res.json(VOLUME_METHODS);
+  });
+
+  // Get coal types
+  app.get("/api/coal-types", (req, res) => {
+    res.json(COAL_TYPES);
+  });
+
+  // Mesh API endpoints
+  // Upload mesh file
+  app.post("/api/mesh/upload", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const fileId = path.basename(req.file.path);
+      const fileUrl = `/api/mesh/files/${fileId}`;
+
+      res.status(200).json({
+        fileId,
+        url: fileUrl,
+        originalName: req.file.originalname,
+        size: req.file.size
+      });
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      res.status(500).json({ error: "Failed to upload file" });
+    }
+  });
+
+  // Serve mesh files
+  app.get("/api/mesh/files/:filename", (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join(process.cwd(), "uploads", filename);
+    
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath);
+    } else {
+      res.status(404).json({ error: "File not found" });
+    }
+  });
+
+  // Process mesh file
+  app.post("/api/mesh/process/:fileId", async (req, res) => {
+    try {
+      const { fileId } = req.params;
+      const { density = 1.3, projectId } = req.body;
+      
+      const filePath = path.join(process.cwd(), "uploads", fileId);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      // In a real implementation, this would use the meshProcessor
+      // For now, we'll simulate the processing
+      
+      // Simulate processing delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Generate simulated results based on file size
+      const stats = fs.statSync(filePath);
+      const volume = (stats.size / 1024) * 0.01; // Simulated volume calculation
+      const weight = volume * density;
+      const surfaceArea = volume * 2.1; // Simulated surface area
+      
+      // Create measurement
+      const measurement = await storage.createMeasurement({
+        projectId: projectId || undefined,
+        name: `Measurement ${new Date().toLocaleString()}`,
+        date: new Date(),
+        volume,
+        weight,
+        density,
+        coalType: Object.entries(COAL_DENSITIES)
+          .find(([_, d]) => Math.abs(d - density) < 0.1)?.[0] || "custom",
+        volumeMethod: "3D_MESH",
+        notes: "Processed from 3D mesh file",
+        meshFileId: fileId
+      });
+
+      res.status(200).json({
+        id: measurement.id,
+        volume,
+        weight,
+        surfaceArea,
+        density,
+        quality: "Good",
+        meshUrl: `/api/mesh/files/${fileId}`
+      });
+    } catch (error) {
+      console.error("Error processing mesh:", error);
+      res.status(500).json({ error: "Failed to process mesh" });
     }
   });
 

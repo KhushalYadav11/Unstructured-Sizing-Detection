@@ -1,18 +1,23 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import meshRoutes from "./routes/mesh";
+import path from "path";
 
 // Suppress PostCSS warning about missing 'from' option (only for console output)
-const originalConsoleWarn = console.warn;
-console.warn = function(...args: any[]) {
-  const message = args.join(' ');
-  if (message.includes('PostCSS plugin did not pass the `from` option')) {
-    return;
-  }
-  originalConsoleWarn.apply(console, args);
-};
+process.env.POSTCSS_NO_WARN = "true";
 
 const app = express();
+
+// Create uploads directory if it doesn't exist
+import fs from "fs";
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, "../uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Security middleware
 app.use((req, res, next) => {
@@ -41,6 +46,12 @@ app.use((req, res, next) => {
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false, limit: '10mb' }));
+
+// Mount mesh routes
+app.use('/api/mesh', meshRoutes);
+
+// Serve uploaded files
+app.use('/uploads', express.static(uploadsDir));
 
 // Basic rate limiting (in production, use redis-based rate limiting)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -100,7 +111,14 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Register API routes
   const server = await registerRoutes(app);
+  
+  // Register mesh routes
+  app.use('/api/mesh', meshRoutes);
+  
+  // Serve uploaded files
+  app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -121,10 +139,10 @@ app.use((req, res, next) => {
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
+  // Other ports are firewalled. Default to 5001 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
+  const port = parseInt(process.env.PORT || '5001', 10);
   server.listen({
     port,
     host: "127.0.0.1",
