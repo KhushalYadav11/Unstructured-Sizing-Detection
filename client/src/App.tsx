@@ -1,6 +1,6 @@
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -17,6 +17,8 @@ import MeshAnalysis from "@/pages/MeshAnalysis";
 import Analytics from "@/pages/Analytics";
 import Reports from "@/pages/Reports";
 import NotFound from "@/pages/not-found";
+import { createProject } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 function Router() {
   return (
@@ -34,6 +36,26 @@ function Router() {
 
 export default function App() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+
+  const { toast } = useToast();
+  const createMutation = useMutation({
+    mutationFn: createProject,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({
+        title: "Project created",
+        description: "Your new project has been created successfully.",
+      });
+      setShowCreateDialog(false);
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to create project. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const style = {
     "--sidebar-width": "16rem",
@@ -67,7 +89,23 @@ export default function App() {
               open={showCreateDialog}
               onOpenChange={setShowCreateDialog}
               onSubmit={(data) => {
-                console.log("New project created:", data);
+                if (!data.name.trim()) {
+                  toast({
+                    title: "Error",
+                    description: "Please enter a project name.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                if (!data.files || data.files.length === 0) {
+                  toast({
+                    title: "Error",
+                    description: "Please upload a 3D model file.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                createMutation.mutate({ name: data.name.trim(), status: "draft" });
               }}
             />
             <Toaster />

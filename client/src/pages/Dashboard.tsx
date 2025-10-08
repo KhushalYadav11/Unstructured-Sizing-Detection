@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { MetricCard } from "@/components/MetricCard";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
@@ -7,12 +7,34 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { TrendingUp, Scale, FileCheck, Target, Plus, Box } from "lucide-react";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
-import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview } from "@/lib/api";
+import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview, createProject } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const { toast } = useToast();
+
+  const createMutation = useMutation({
+    mutationFn: createProject,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      toast({
+        title: "Project created",
+        description: "Your new project has been created successfully.",
+      });
+      setShowCreateDialog(false);
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to create project. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: projects, isLoading: projectsLoading } = useQuery({
     queryKey: ["/api/projects"],
@@ -137,8 +159,23 @@ export default function Dashboard() {
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
         onSubmit={(data) => {
-          console.log("New project created:", data);
-          setLocation("/projects");
+          if (!data.name.trim()) {
+            toast({
+              title: "Error",
+              description: "Please enter a project name.",
+              variant: "destructive",
+            });
+            return;
+          }
+          if (!data.files || data.files.length === 0) {
+            toast({
+              title: "Error",
+              description: "Please upload a 3D model file.",
+              variant: "destructive",
+            });
+            return;
+          }
+          createMutation.mutate({ name: data.name.trim(), status: "draft" });
         }}
       />
     </div>
