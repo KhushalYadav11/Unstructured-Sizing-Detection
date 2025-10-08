@@ -16,7 +16,16 @@ const inlineViteConfig = {
 };
 import { nanoid } from "nanoid";
 
+// Create custom logger to filter out PostCSS warnings
 const viteLogger = createLogger();
+const originalWarn = viteLogger.warn;
+viteLogger.warn = (msg, options) => {
+  // Filter out PostCSS 'from' option warnings
+  if (typeof msg === 'string' && msg.includes('PostCSS plugin did not pass the `from` option')) {
+    return;
+  }
+  originalWarn(msg, options);
+};
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

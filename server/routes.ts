@@ -4,6 +4,9 @@ import { storage } from "./storage";
 import { insertProjectSchema, insertMeasurementSchema, COAL_TYPES, VOLUME_METHODS } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
+import { upload, cleanupFile, getFileInfo } from "./upload-handler";
+import { meshProcessor, COAL_DENSITIES } from "./mesh-processor";
+import path from "path";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Projects
@@ -182,6 +185,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to calculate" });
+    }
+  });
+
+  // Mesh Processing Routes
+  app.post("/api/mesh/upload", upload.single('modelFile'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const coalType = req.body.coalType || 'bituminous';
+      
+      // Validate coal type
+      if (!COAL_DENSITIES[coalType]) {
+        cleanupFile(req.file.path);
+        return res.status(400).json({ error: "Invalid coal type" });
+      }
+
+      // Validate file format
+      if (!meshProcessor.validateObjFile(req.file.path)) {
+        cleanupFile(req.file.path);
+        return res.status(400).json({ error: "Invalid or corrupted OBJ file" });
+      }
+
+      // Process the mesh
+      const result = await meshProcessor.processObjFile(req.file.path, coalType);
+      
+      // Get file info
+      const fileInfo = getFileInfo(req.file.path);
+      
+      // Cleanup uploaded file
+      cleanupFile(req.file.path);
+
+      res.json({
+        ...result,
+        coalType,
+        coalDensity: COAL_DENSITIES[coalType].density,
+        fileName: req.file.originalname,
+        fileSize: fileInfo.size,
+        processedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      // Cleanup file on error
+      if (req.file) {
+        cleanupFile(req.file.path);
+      }
+      
+      const message = error instanceof Error ? error.message : 'Unknown error occurred';
+      res.status(500).json({ error: `Mesh processing failed: ${message}` });
+    }
+  });
+
+  // Get available coal types
+  app.get("/api/mesh/coal-types", (req, res) => {
+    res.json(COAL_DENSITIES);
+  });
+
+  // Validate uploaded file without processing
+  app.post("/api/mesh/validate", upload.single('modelFile'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const isValid = meshProcessor.validateObjFile(req.file.path);
+      const fileInfo = getFileInfo(req.file.path);
+      
+      // Cleanup file
+      cleanupFile(req.file.path);
+
+      res.json({
+        valid: isValid,
+        fileName: req.file.originalname,
+        fileSize: fileInfo.size,
+        fileExtension: path.extname(req.file.originalname).toLowerCase()
+      });
+    } catch (error) {
+      if (req.file) {
+        cleanupFile(req.file.path);
+      }
+      res.status(500).json({ error: "File validation failed" });
     }
   });
 

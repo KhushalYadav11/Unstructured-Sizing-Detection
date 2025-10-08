@@ -2,6 +2,16 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
+// Suppress PostCSS warning about missing 'from' option (only for console output)
+const originalConsoleWarn = console.warn;
+console.warn = function(...args: any[]) {
+  const message = args.join(' ');
+  if (message.includes('PostCSS plugin did not pass the `from` option')) {
+    return;
+  }
+  originalConsoleWarn.apply(console, args);
+};
+
 const app = express();
 
 // Security middleware
@@ -121,5 +131,6 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    log(`Open http://localhost:${port} in your browser`);
   });
 })();

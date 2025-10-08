@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/MetricCard";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Scale, FileCheck, Target, Plus } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { TrendingUp, Scale, FileCheck, Target, Plus, Box } from "lucide-react";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
 import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview } from "@/lib/api";
@@ -76,6 +77,28 @@ export default function Dashboard() {
           icon={FileCheck}
         />
       </div>
+
+      {/* Quick Access to 3D Analysis */}
+      <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border-blue-200 dark:border-blue-800">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Box className="h-5 w-5 text-blue-600" />
+            3D Mesh Analysis
+          </CardTitle>
+          <CardDescription>
+            Upload your .obj files from Meshroom for automated volume and weight calculation
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button 
+            onClick={() => setLocation("/mesh-analysis")}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            <Box className="h-4 w-4 mr-2" />
+            Start 3D Analysis
+          </Button>
+        </CardContent>
+      </Card>
 
       <div>
         <h2 className="text-xl font-semibold mb-4">Recent Projects</h2>

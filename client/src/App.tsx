@@ -13,6 +13,7 @@ import { useState } from "react";
 import Dashboard from "@/pages/Dashboard";
 import Projects from "@/pages/Projects";
 import Measurement from "@/pages/Measurement";
+import MeshAnalysis from "@/pages/MeshAnalysis";
 import Analytics from "@/pages/Analytics";
 import Reports from "@/pages/Reports";
 import NotFound from "@/pages/not-found";
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/projects" component={Projects} />
       <Route path="/measurement/:id" component={Measurement} />
+      <Route path="/mesh-analysis" component={MeshAnalysis} />
       <Route path="/analytics" component={Analytics} />
       <Route path="/reports" component={Reports} />
       <Route component={NotFound} />
