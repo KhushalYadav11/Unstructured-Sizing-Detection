@@ -1,7 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import meshRoutes from "./routes/mesh";
 import path from "path";
 
 // Suppress PostCSS warning about missing 'from' option (only for console output)
@@ -47,8 +46,6 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 
-// Mount mesh routes
-app.use('/api/mesh', meshRoutes);
 
 // Serve uploaded files
 app.use('/uploads', express.static(uploadsDir));
@@ -114,9 +111,7 @@ app.use((req, res, next) => {
   // Register API routes
   const server = await registerRoutes(app);
   
-  // Register mesh routes
-  app.use('/api/mesh', meshRoutes);
-  
+    
   // Serve uploaded files
   app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 

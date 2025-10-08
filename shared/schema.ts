@@ -43,14 +43,14 @@ export type Project = typeof projects.$inferSelect;
 export type InsertMeasurement = z.infer<typeof insertMeasurementSchema>;
 export type Measurement = typeof measurements.$inferSelect;
 
-// Coal types with densities (g/cm³)
+// Coal types with densities (kg/m³)
 export const COAL_TYPES = {
-  anthracite: { name: "Anthracite", density: 1.5 },
-  bituminous: { name: "Bituminous Coal", density: 1.3 },
-  "sub-bituminous": { name: "Sub-bituminous Coal", density: 1.2 },
-  lignite: { name: "Lignite", density: 1.1 },
-  coking: { name: "Coking Coal", density: 1.35 },
-  thermal: { name: "Thermal Coal", density: 1.25 },
+  anthracite: { name: "Anthracite", density: 1500 },
+  bituminous: { name: "Bituminous Coal", density: 1300 },
+  "sub-bituminous": { name: "Sub-bituminous Coal", density: 1200 },
+  lignite: { name: "Lignite", density: 1100 },
+  coking: { name: "Coking Coal", density: 1350 },
+  thermal: { name: "Thermal Coal", density: 1250 },
 } as const;
 
 // Volume calculation methods

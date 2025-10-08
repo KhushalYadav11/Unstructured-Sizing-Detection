@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+import tempfile
 
 load_dotenv()
 
@@ -11,7 +12,10 @@ class Settings:
     MESHROOM_PATH: str = os.getenv("MESHROOM_PATH", "/usr/local/bin/meshroom_batch")
     CLOUDCOMPARE_PATH: str = os.getenv("CLOUDCOMPARE_PATH", "/usr/local/bin/CloudCompare")
     GPU_ENABLED: bool = os.getenv("GPU_ENABLED", "true").lower() == "true"
-    COAL_DENSITY: float = float(os.getenv("COAL_DENSITY", 0.8))  # tonnes/m^3
+    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(tempfile.gettempdir(), "coal_uploads"))
+    RESULTS_DIR: str = os.getenv("RESULTS_DIR", os.path.join(tempfile.gettempdir(), "coal_results"))
+    MESHROOM_TIMEOUT: int = int(os.getenv("MESHROOM_TIMEOUT", "3600"))
+    COAL_DENSITY: float = float(os.getenv("COAL_DENSITY", 1300.0))  # kg/m^3
     FRAME_EXTRACTION_INTERVAL: float = float(os.getenv("FRAME_EXTRACTION_INTERVAL", 1.0))
 
 settings = Settings()

@@ -9,8 +9,9 @@ import os, shutil, uuid
 from app.deps import get_db
 from app.models import Job
 from app.tasks import run_meshroom_job, compute_volume
+from app.config import settings
 
-UPLOAD_DIR = "/tmp/coal_uploads"
+UPLOAD_DIR = settings.UPLOAD_DIR
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/")
@@ -44,9 +45,11 @@ def submit_job(
     user_dir = os.path.join(UPLOAD_DIR, f"user_{user_id}")
     os.makedirs(user_dir, exist_ok=True)
     
-    # Sanitize filename to prevent path traversal
-    safe_filename = os.path.basename(file.filename)
-    file_path = os.path.join(user_dir, f"{job_uuid}_{safe_filename}")
+    # Use UUID-based filename to prevent path traversal and collisions
+    original_ext = os.path.splitext(file.filename)[1].lower()
+    safe_ext = original_ext if original_ext in {'.zip', '.mp4', '.avi', '.mov', '.jpg', '.jpeg', '.png'} else ''
+    safe_name = f"{job_uuid}{safe_ext}"
+    file_path = os.path.join(user_dir, safe_name)
     
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)

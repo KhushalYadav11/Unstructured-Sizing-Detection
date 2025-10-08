@@ -170,7 +170,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const volume = volumeCalc.calculate(length, width, height);
-      const weight = volume * coalData.density; // Convert g/cm³ to MT/m³
+      const weight = volume * coalData.density; // Assumes density in kg/m³; volume in m³ → weight in kg
 
       // Determine quality based on dimensional consistency
       let quality: "excellent" | "good" | "fair" | "poor" = "good";
@@ -192,51 +192,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Mesh Processing Routes
-  app.post("/api/mesh/upload", upload.single('modelFile'), async (req, res) => {
+  // Upload mesh file (form field: 'file')
+  app.post("/api/mesh/upload", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const coalType = req.body.coalType || 'bituminous';
-      
-      // Validate coal type
-      if (!COAL_DENSITIES[coalType]) {
-        cleanupFile(req.file.path);
-        return res.status(400).json({ error: "Invalid coal type" });
-      }
+      const fileId = path.basename(req.file.path);
+      const fileUrl = `/api/mesh/files/${fileId}`;
 
-      // Validate file format
-      if (!meshProcessor.validateObjFile(req.file.path)) {
-        cleanupFile(req.file.path);
-        return res.status(400).json({ error: "Invalid or corrupted OBJ file" });
-      }
-
-      // Process the mesh
-      const result = await meshProcessor.processObjFile(req.file.path, coalType);
-      
-      // Get file info
-      const fileInfo = getFileInfo(req.file.path);
-      
-      // Cleanup uploaded file
-      cleanupFile(req.file.path);
-
-      res.json({
-        ...result,
-        coalType,
-        coalDensity: COAL_DENSITIES[coalType].density,
-        fileName: req.file.originalname,
-        fileSize: fileInfo.size,
-        processedAt: new Date().toISOString()
+      res.status(200).json({
+        fileId,
+        url: fileUrl,
+        originalName: req.file.originalname,
+        size: req.file.size,
       });
     } catch (error) {
-      // Cleanup file on error
-      if (req.file) {
-        cleanupFile(req.file.path);
-      }
-      
-      const message = error instanceof Error ? error.message : 'Unknown error occurred';
-      res.status(500).json({ error: `Mesh processing failed: ${message}` });
+      console.error("Error uploading file:", error);
+      res.status(500).json({ error: "Failed to upload file" });
     }
   });
 
@@ -246,7 +220,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Validate uploaded file without processing
-  app.post("/api/mesh/validate", upload.single('modelFile'), async (req, res) => {
+  app.post("/api/mesh/validate", upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -328,29 +302,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(COAL_TYPES);
   });
 
-  // Mesh API endpoints
-  // Upload mesh file
-  app.post("/api/mesh/upload", upload.single("file"), async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: "No file uploaded" });
-      }
-
-      const fileId = path.basename(req.file.path);
-      const fileUrl = `/api/mesh/files/${fileId}`;
-
-      res.status(200).json({
-        fileId,
-        url: fileUrl,
-        originalName: req.file.originalname,
-        size: req.file.size
-      });
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      res.status(500).json({ error: "Failed to upload file" });
-    }
-  });
-
+  
   // Serve mesh files
   app.get("/api/mesh/files/:filename", (req, res) => {
     const filename = req.params.filename;
@@ -367,7 +319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/mesh/process/:fileId", async (req, res) => {
     try {
       const { fileId } = req.params;
-      const { density = 1.3, projectId } = req.body;
+      const { density = 1300, projectId } = req.body as { density?: number; projectId?: string };
       
       const filePath = path.join(process.cwd(), "uploads", fileId);
       
@@ -375,31 +327,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "File not found" });
       }
 
-      // In a real implementation, this would use the meshProcessor
-      // For now, we'll simulate the processing
-      
       // Simulate processing delay
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Generate simulated results based on file size
       const stats = fs.statSync(filePath);
-      const volume = (stats.size / 1024) * 0.01; // Simulated volume calculation
-      const weight = volume * density;
+      const volume = (stats.size / 1024) * 0.01; // Simulated volume in m^3
+      const weight = volume * density; // kg, if density is kg/m^3
       const surfaceArea = volume * 2.1; // Simulated surface area
       
-      // Create measurement
+      // Determine coal type key from provided density (closest match)
+      const coalTypeKey = Object.entries(COAL_DENSITIES)
+        .find(([_k, cfg]) => Math.abs(cfg.density - density) < 1e-6)?.[0] || "custom";
+
+      // Ensure we have a project to attach to
+      let targetProjectId = projectId;
+      if (!targetProjectId) {
+        const tempProject = await storage.createProject({ name: "Untitled", status: "draft" });
+        targetProjectId = tempProject.id;
+      }
+      
+      // Create measurement matching shared schema fields
       const measurement = await storage.createMeasurement({
-        projectId: projectId || undefined,
-        name: `Measurement ${new Date().toLocaleString()}`,
-        date: new Date(),
-        volume,
-        weight,
-        density,
-        coalType: Object.entries(COAL_DENSITIES)
-          .find(([_, d]) => Math.abs(d - density) < 0.1)?.[0] || "custom",
+        projectId: targetProjectId,
+        length: 0,
+        width: 0,
+        height: 0,
+        unit: "meters",
+        coalType: coalTypeKey,
+        coalDensity: density,
         volumeMethod: "3D_MESH",
-        notes: "Processed from 3D mesh file",
-        meshFileId: fileId
+        calculatedVolume: volume,
+        calculatedWeight: weight,
+        quality: "good",
       });
 
       res.status(200).json({
@@ -408,7 +368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         weight,
         surfaceArea,
         density,
-        quality: "Good",
+        quality: "good",
         meshUrl: `/api/mesh/files/${fileId}`
       });
     } catch (error) {
