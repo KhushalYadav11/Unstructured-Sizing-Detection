@@ -57,6 +57,12 @@ export class MemStorage implements IStorage {
       ...insertProject,
       id,
       status: insertProject.status || "draft",
+      length: insertProject.length || null,
+      width: insertProject.width || null,
+      height: insertProject.height || null,
+      volume: insertProject.volume || null,
+      meshFileName: insertProject.meshFileName || null,
+      meshFilePath: insertProject.meshFilePath || null,
       createdAt: now,
       updatedAt: now,
     };

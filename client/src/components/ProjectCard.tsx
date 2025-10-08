@@ -1,7 +1,7 @@
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Folder, Calendar, TrendingUp, MoreVertical, Box } from "lucide-react";
+import { Folder, Calendar, TrendingUp, MoreVertical, Box, Ruler } from "lucide-react";
 
 interface ProjectCardProps {
   id: string;
@@ -13,8 +13,9 @@ interface ProjectCardProps {
   weight?: number;
   onClick?: () => void;
   has3DModels?: boolean;
-  project: Project;
-  stats?: ProjectStats;
+  length?: number;
+  width?: number;
+  height?: number;
 }
 
 const statusConfig = {
@@ -33,7 +34,12 @@ export function ProjectCard({
   weight,
   onClick,
   has3DModels,
+  length,
+  width,
+  height,
 }: ProjectCardProps) {
+  const hasDimensions = length !== undefined && width !== undefined && height !== undefined;
+  
   return (
     <Card
       className="hover-elevate active-elevate-2 cursor-pointer"
@@ -49,10 +55,10 @@ export function ProjectCard({
             <h3 className="font-semibold truncate" data-testid="text-project-name">
               {name}
             </h3>
-            {has3DModels && (
+            {hasDimensions && (
               <div className="flex items-center gap-1 text-xs text-primary">
-                <Cube className="h-3 w-3" />
-                <span>3D Analysis Available</span>
+                <Ruler className="h-3 w-3" />
+                <span>3D Model Analyzed</span>
               </div>
             )}
           </div>
@@ -84,7 +90,36 @@ export function ProjectCard({
           </div>
         </div>
         
-        {volume && weight && (
+        {hasDimensions && (
+          <div className="space-y-2 pt-2 border-t">
+            <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+              <Ruler className="h-3 w-3" />
+              Extracted Dimensions
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-xs text-muted-foreground">Length</div>
+                <div className="font-mono text-sm font-semibold" data-testid="text-project-length">
+                  {length?.toFixed(2)} m
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Width</div>
+                <div className="font-mono text-sm font-semibold" data-testid="text-project-width">
+                  {width?.toFixed(2)} m
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Height</div>
+                <div className="font-mono text-sm font-semibold" data-testid="text-project-height">
+                  {height?.toFixed(2)} m
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {volume && (
           <div className="grid grid-cols-2 gap-3 pt-2 border-t">
             <div>
               <div className="text-xs text-muted-foreground">Volume</div>
@@ -92,12 +127,14 @@ export function ProjectCard({
                 {volume.toFixed(2)} m³
               </div>
             </div>
-            <div>
-              <div className="text-xs text-muted-foreground">Weight</div>
-              <div className="font-mono font-semibold" data-testid="text-project-weight">
-                {weight.toFixed(2)} MT
+            {weight && (
+              <div>
+                <div className="text-xs text-muted-foreground">Weight</div>
+                <div className="font-mono font-semibold" data-testid="text-project-weight">
+                  {weight.toFixed(2)} MT
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </CardContent>

@@ -11,6 +11,11 @@ export interface MeshProcessingResult {
     min: { x: number; y: number; z: number };
     max: { x: number; y: number; z: number };
   };
+  dimensions: {
+    length: number;
+    width: number;
+    height: number;
+  };
 }
 
 export interface CoalDensityConfig {
@@ -161,6 +166,17 @@ export class MeshProcessor {
   }
 
   /**
+   * Extract dimensions from bounding box
+   */
+  private extractDimensions(boundingBox: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } }) {
+    return {
+      length: Math.abs(boundingBox.max.x - boundingBox.min.x),
+      width: Math.abs(boundingBox.max.y - boundingBox.min.y),
+      height: Math.abs(boundingBox.max.z - boundingBox.min.z)
+    };
+  }
+
+  /**
    * Process OBJ file and calculate volume and weight
    */
   async processObjFile(
@@ -184,6 +200,9 @@ export class MeshProcessor {
       // Calculate bounding box
       const boundingBox = this.calculateBoundingBox(vertices);
       
+      // Extract dimensions
+      const dimensions = this.extractDimensions(boundingBox);
+      
       // Get coal density
       const coalConfig = COAL_DENSITIES[coalType] || COAL_DENSITIES.bituminous;
       
@@ -196,7 +215,8 @@ export class MeshProcessor {
         vertices: vertices.length,
         faces: faces.length,
         surfaceArea,
-        boundingBox
+        boundingBox,
+        dimensions
       };
     } catch (error) {
       throw new Error(`Failed to process OBJ file: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -213,16 +233,31 @@ export class MeshProcessor {
       
       let hasVertices = false;
       let hasFaces = false;
+      let vertexCount = 0;
+      let faceCount = 0;
       
-      for (const line of lines.slice(0, 100)) { // Check first 100 lines
+      // Check entire file for vertices and faces
+      for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed.startsWith('v ')) hasVertices = true;
-        if (trimmed.startsWith('f ')) hasFaces = true;
-        if (hasVertices && hasFaces) return true;
+        if (trimmed.startsWith('v ')) {
+          hasVertices = true;
+          vertexCount++;
+        }
+        if (trimmed.startsWith('f ')) {
+          hasFaces = true;
+          faceCount++;
+        }
       }
       
+      console.log(`OBJ Validation for ${filePath}:`);
+      console.log(`  Total lines: ${lines.length}`);
+      console.log(`  Vertices found: ${vertexCount}`);
+      console.log(`  Faces found: ${faceCount}`);
+      console.log(`  Valid: ${hasVertices && hasFaces}`);
+      
       return hasVertices && hasFaces;
-    } catch {
+    } catch (error) {
+      console.error(`OBJ Validation error for ${filePath}:`, error);
       return false;
     }
   }

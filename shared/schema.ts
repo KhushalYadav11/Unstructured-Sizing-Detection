@@ -7,6 +7,13 @@ export const projects = pgTable("projects", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   status: text("status", { enum: ["draft", "processing", "completed"] }).notNull().default("draft"),
+  // 3D Model dimensions extracted from uploaded .obj file
+  length: real("length"),
+  width: real("width"),
+  height: real("height"),
+  volume: real("volume"),
+  meshFileName: text("mesh_file_name"),
+  meshFilePath: text("mesh_file_path"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

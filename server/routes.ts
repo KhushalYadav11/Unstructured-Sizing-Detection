@@ -55,6 +55,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create project with 3D model upload and automatic dimension extraction
+  app.post("/api/projects/with-mesh", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      // Validate file is .obj format
+      const fileExtension = path.extname(req.file.originalname).toLowerCase();
+      if (fileExtension !== '.obj') {
+        cleanupFile(req.file.path);
+        return res.status(400).json({ error: "Only .obj files are supported" });
+      }
+
+      // Validate OBJ file structure
+      console.log(`Validating uploaded file: ${req.file.originalname} at ${req.file.path}`);
+      const isValid = meshProcessor.validateObjFile(req.file.path);
+      console.log(`Validation result: ${isValid}`);
+      if (!isValid) {
+        console.log(`File rejected: ${req.file.originalname}`);
+        cleanupFile(req.file.path);
+        return res.status(400).json({ error: "Invalid .obj file format" });
+      }
+      console.log(`File accepted: ${req.file.originalname}`);
+
+      // Get project name from request body
+      const { name } = req.body;
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        cleanupFile(req.file.path);
+        return res.status(400).json({ error: "Project name is required" });
+      }
+
+      // Process the mesh file to extract dimensions and volume
+      const meshResult = await meshProcessor.processObjFile(req.file.path);
+
+      // Create project with extracted dimensions
+      const project = await storage.createProject({
+        name: name.trim(),
+        status: "completed",
+        length: meshResult.dimensions.length,
+        width: meshResult.dimensions.width,
+        height: meshResult.dimensions.height,
+        volume: meshResult.volume,
+        meshFileName: req.file.originalname,
+        meshFilePath: req.file.path,
+      });
+
+      res.status(201).json({
+        project,
+        meshAnalysis: {
+          dimensions: meshResult.dimensions,
+          volume: meshResult.volume,
+          weight: meshResult.weight,
+          vertices: meshResult.vertices,
+          faces: meshResult.faces,
+          surfaceArea: meshResult.surfaceArea,
+          boundingBox: meshResult.boundingBox,
+        }
+      });
+    } catch (error) {
+      // Cleanup file on error
+      if (req.file) {
+        cleanupFile(req.file.path);
+      }
+      console.error("Error creating project with mesh:", error);
+      res.status(500).json({ 
+        error: "Failed to create project with mesh analysis",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   app.patch("/api/projects/:id", async (req, res) => {
     try {
       const result = insertProjectSchema.partial().safeParse(req.body);

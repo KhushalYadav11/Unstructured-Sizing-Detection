@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Plus, Search } from "lucide-react";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
-import { getProjects, getProjectStats, createProject } from "@/lib/api";
+import { getProjects, getProjectStats } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,32 +18,23 @@ export default function Projects() {
   const { toast } = useToast();
 
   const { data: projects, isLoading } = useQuery({
-    queryKey: ["/api/projects"],
+    queryKey: ["projects"],
     queryFn: getProjects,
-  });
-
-  const createMutation = useMutation({
-    mutationFn: createProject,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      toast({
-        title: "Project created",
-        description: "Your new project has been created successfully.",
-      });
-      setShowCreateDialog(false);
-    },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to create project. Please try again.",
-        variant: "destructive",
-      });
-    },
   });
 
   const filteredProjects = projects?.filter((project) =>
     project.name.toLowerCase().includes(searchQuery.toLowerCase())
   ) || [];
+
+  const handleProjectSuccess = (project: any) => {
+    toast({
+      title: "Success",
+      description: `Project "${project.name}" created with extracted dimensions`,
+    });
+    queryClient.invalidateQueries({ queryKey: ["projects"] });
+    // Navigate to mesh analysis page with project ID
+    setLocation(`/mesh-analysis?project=${project.id}`);
+  };
 
   return (
     <div className="space-y-6">
@@ -86,7 +77,7 @@ export default function Projects() {
                 key={project.id}
                 project={project}
                 lastUpdated={lastUpdated}
-                onClick={() => setLocation(`/measurement/${project.id}`)}
+                onClick={() => setLocation(`/mesh-analysis?project=${project.id}`)}
               />
             );
           })}
@@ -94,7 +85,7 @@ export default function Projects() {
       ) : (
         <div className="text-center py-12">
           <p className="text-muted-foreground">
-            {searchQuery ? "No projects found matching your search." : "No projects yet"}
+            {searchQuery ? "No projects found matching your search." : "No projects yet. Create one to get started!"}
           </p>
         </div>
       )}
@@ -102,27 +93,7 @@ export default function Projects() {
       <CreateProjectDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
-        onSubmit={(data) => {
-          if (!data.name.trim()) {
-            toast({
-              title: "Error",
-              description: "Please enter a project name.",
-              variant: "destructive",
-            });
-            return;
-          }
-          
-          if (!data.files || data.files.length === 0) {
-            toast({
-              title: "Error", 
-              description: "Please upload a 3D model file.",
-              variant: "destructive",
-            });
-            return;
-          }
-          
-          createMutation.mutate({ name: data.name.trim(), status: "draft" });
-        }}
+        onSuccess={handleProjectSuccess}
       />
     </div>
   );
@@ -138,12 +109,12 @@ function ProjectCardWithStats({
   onClick: () => void;
 }) {
   const { data: stats } = useQuery({
-    queryKey: ["/api/projects", project.id, "stats"],
+    queryKey: ["projects", project.id, "stats"],
     queryFn: () => getProjectStats(project.id),
   });
 
   // Check if project has 3D models
-  const has3DModels = stats?.measurements?.some(m => m.type === '3d_model') || false;
+  const has3DModels = project.meshFileName !== null;
 
   return (
     <ProjectCard
@@ -152,9 +123,12 @@ function ProjectCardWithStats({
       status={project.status}
       measurements={stats?.totalMeasurements || 0}
       lastUpdated={lastUpdated}
-      volume={stats?.totalVolume}
+      volume={project.volume || stats?.totalVolume}
       weight={stats?.totalWeight}
       has3DModels={has3DModels}
+      length={project.length}
+      width={project.width}
+      height={project.height}
       onClick={onClick}
     />
   );
