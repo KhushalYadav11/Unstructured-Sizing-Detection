@@ -15,6 +15,11 @@ export async function getProject(id: string): Promise<Project> {
   return response.json();
 }
 
+export interface CreateProjectWithFiles {
+  name: string;
+  files?: File[];
+}
+
 export async function createProject(data: InsertProject): Promise<Project> {
   const response = await fetch(`${API_BASE}/projects`, {
     method: "POST",

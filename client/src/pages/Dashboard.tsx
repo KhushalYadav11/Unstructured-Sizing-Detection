@@ -1,40 +1,18 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/MetricCard";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { TrendingUp, Scale, FileCheck, Target, Plus, Box } from "lucide-react";
+import { TrendingUp, Scale, FileCheck, Plus, Box } from "lucide-react";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
-import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview, createProject } from "@/lib/api";
+import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
-import { queryClient } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const { toast } = useToast();
-
-  const createMutation = useMutation({
-    mutationFn: createProject,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      toast({
-        title: "Project created",
-        description: "Your new project has been created successfully.",
-      });
-      setShowCreateDialog(false);
-    },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to create project. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
 
   const { data: projects, isLoading: projectsLoading } = useQuery({
     queryKey: ["/api/projects"],
@@ -112,13 +90,23 @@ export default function Dashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button 
-            onClick={() => setLocation("/mesh-analysis")}
-            className="bg-blue-600 hover:bg-blue-700"
-          >
-            <Box className="h-4 w-4 mr-2" />
-            Start 3D Analysis
-          </Button>
+          <div className="flex gap-4">
+            <Button
+              onClick={() => setLocation("/mesh-analysis")}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <Box className="h-4 w-4 mr-2" />
+              Start 3D Analysis
+            </Button>
+
+            <Button
+              onClick={() => setLocation("/3d-view")}
+              className="bg-indigo-600 hover:bg-indigo-700"
+            >
+              <Box className="h-4 w-4 mr-2" />
+              3D Model Viewer
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -158,25 +146,6 @@ export default function Dashboard() {
       <CreateProjectDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
-        onSubmit={(data) => {
-          if (!data.name.trim()) {
-            toast({
-              title: "Error",
-              description: "Please enter a project name.",
-              variant: "destructive",
-            });
-            return;
-          }
-          if (!data.files || data.files.length === 0) {
-            toast({
-              title: "Error",
-              description: "Please upload a 3D model file.",
-              variant: "destructive",
-            });
-            return;
-          }
-          createMutation.mutate({ name: data.name.trim(), status: "draft" });
-        }}
       />
     </div>
   );

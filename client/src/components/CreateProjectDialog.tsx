@@ -14,6 +14,11 @@ import { Upload, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+export interface CreateProjectFormData {
+  name: string;
+  files?: File[];
+}
+
 interface CreateProjectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;

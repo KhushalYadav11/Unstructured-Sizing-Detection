@@ -16,6 +16,7 @@ import { Loader2 } from "lucide-react";
 // Lazy load the 3D Analysis component as it might be heavy
 const Analysis3D = lazy(() => import("./pages/Analysis3D"));
 const Settings = lazy(() => import("./pages/Settings"));
+const ThreeDView = lazy(() => import("./pages/ThreeDView"));
 
 // Loading fallback
 const PageLoader = () => (
@@ -42,6 +43,7 @@ export default function App() {
                   <Route path="/" component={Dashboard} />
                   <Route path="/projects" component={Projects} />
                   <Route path="/mesh-analysis" component={Analysis3D} />
+                  <Route path="/3d-view" component={ThreeDView} />
                   <Route path="/analytics" component={Analytics} />
                   <Route path="/reports" component={Reports} />
                   <Route path="/settings" component={Settings} />
