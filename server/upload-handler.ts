@@ -10,22 +10,22 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+const baseStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
     cb(null, uploadsDir);
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
     // Generate unique filename with original extension
     const uniqueName = `${randomUUID()}${path.extname(file.originalname)}`;
     cb(null, uniqueName);
   }
 });
 
-// File filter to only allow specific 3D model formats
-const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+// File filters tailored to specific upload contexts
+const meshFileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   const allowedExtensions = ['.obj', '.ply', '.stl'];
   const fileExtension = path.extname(file.originalname).toLowerCase();
-  
+
   if (allowedExtensions.includes(fileExtension)) {
     cb(null, true);
   } else {
@@ -33,13 +33,31 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
   }
 };
 
-// Configure multer with size limits and file filtering
+const photoFileFilter = (_req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedMimeTypes = ['image/jpeg', 'image/png'];
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Unsupported media type'));
+  }
+};
+
+// Upload handlers
 export const upload = multer({
-  storage,
-  fileFilter,
+  storage: baseStorage,
+  fileFilter: meshFileFilter,
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
     files: 1 // Only one file at a time
+  }
+});
+
+export const photoUpload = multer({
+  storage: baseStorage,
+  fileFilter: photoFileFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024,
+    files: 50
   }
 });
 

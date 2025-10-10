@@ -1,15 +1,16 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { insertProjectSchema, insertMeasurementSchema, COAL_TYPES, VOLUME_METHODS } from "@shared/schema";
+import { storage, MemStorage } from "./storage";
+import { insertProjectSchema, insertMeasurementSchema, COAL_TYPES, VOLUME_METHODS, type PhotoExif, type InsertProjectPhoto } from "@shared/schema";
 import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
-import { upload, cleanupFile, getFileInfo } from "./upload-handler";
+import { upload, photoUpload, cleanupFile, getFileInfo } from "./upload-handler";
 import { meshProcessor, COAL_DENSITIES } from "./mesh-processor";
 import path from "path";
 import multer from "multer";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
+import ExifParserFactory from "exif-parser";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Projects
