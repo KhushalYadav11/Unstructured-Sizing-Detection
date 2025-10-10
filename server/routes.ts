@@ -11,6 +11,7 @@ import multer from "multer";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import ExifParserFactory from "exif-parser";
+import { eventBroadcaster } from "./events";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Projects
@@ -376,6 +377,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   
+  // SSE Event Stream
+  app.get("/api/projects/:projectId/events", async (req, res) => {
+    const { projectId } = req.params;
+
+    // Validate project exists
+    const project = await storage.getProject(projectId);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    // Set up SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+
+    // Register client for events
+    eventBroadcaster.addClient(projectId, res);
+
+    // Keep connection alive with periodic heartbeat
+    const heartbeat = setInterval(() => {
+      res.write(": heartbeat\n\n");
+    }, 30000); // Every 30 seconds
+
+    // Clean up on disconnect
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      eventBroadcaster.removeClient(projectId, res);
+    });
+  });
+
   // Photo Upload & Reconstruction
   app.post("/api/projects/:projectId/photos", photoUpload.array("files[]", 50), async (req, res) => {
     try {
@@ -463,6 +495,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Add photos to storage
       const photos = await storage.addProjectPhotos(projectId, photoRecords);
 
+      // Broadcast photos uploaded event
+      eventBroadcaster.broadcast(projectId, {
+        type: "photos.uploaded",
+        data: { count: photos.length },
+      });
+
       // Create photogrammetry job if kickoff is true
       let photogrammetryJob = null;
       if (kickoff) {
@@ -482,6 +520,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.updateProjectReconstruction(projectId, {
             status: "queued",
             latestJobId: job.id,
+          });
+
+          // Broadcast reconstruction status change
+          eventBroadcaster.broadcast(projectId, {
+            type: "reconstruction.status_changed",
+            data: { status: "queued", progress: 0 },
           });
         } catch (err) {
           console.error("Failed to queue photogrammetry job:", err);
@@ -579,6 +623,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
       });
 
+      // Broadcast measurement created event
+      eventBroadcaster.broadcast(projectId, {
+        type: "measurement.created",
+        data: { measurementId: measurement.id },
+      });
+
       res.status(201).json({
         ...measurement,
         createdAt: measurement.createdAt.toISOString(),
@@ -592,12 +642,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/projects/:projectId/measurements/:measurementId", async (req, res) => {
     try {
-      const { measurementId } = req.params;
+      const { projectId, measurementId } = req.params;
       const updated = await storage.updateViewerMeasurement(measurementId, req.body);
       
       if (!updated) {
         return res.status(404).json({ message: "Measurement not found" });
       }
+
+      // Broadcast measurement updated event
+      eventBroadcaster.broadcast(projectId, {
+        type: "measurement.updated",
+        data: { measurementId },
+      });
 
       res.json({
         ...updated,
@@ -612,10 +668,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/projects/:projectId/measurements/:measurementId", async (req, res) => {
     try {
-      const deleted = await storage.deleteViewerMeasurement(req.params.measurementId);
+      const { projectId, measurementId } = req.params;
+      const deleted = await storage.deleteViewerMeasurement(measurementId);
       if (!deleted) {
         return res.status(404).json({ message: "Measurement not found" });
       }
+
+      // Broadcast measurement deleted event
+      eventBroadcaster.broadcast(projectId, {
+        type: "measurement.deleted",
+        data: { measurementId },
+      });
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting viewer measurement:", error);
@@ -653,6 +717,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
       });
 
+      // Broadcast annotation created event
+      eventBroadcaster.broadcast(projectId, {
+        type: "annotation.created",
+        data: { annotationId: annotation.id },
+      });
+
       res.status(201).json({
         ...annotation,
         createdAt: annotation.createdAt.toISOString(),
@@ -666,12 +736,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/projects/:projectId/annotations/:annotationId", async (req, res) => {
     try {
-      const { annotationId } = req.params;
+      const { projectId, annotationId } = req.params;
       const updated = await storage.updateAnnotation(annotationId, req.body);
       
       if (!updated) {
         return res.status(404).json({ message: "Annotation not found" });
       }
+
+      // Broadcast annotation updated event
+      eventBroadcaster.broadcast(projectId, {
+        type: "annotation.updated",
+        data: { annotationId },
+      });
 
       res.json({
         ...updated,
@@ -686,10 +762,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/projects/:projectId/annotations/:annotationId", async (req, res) => {
     try {
-      const deleted = await storage.deleteAnnotation(req.params.annotationId);
+      const { projectId, annotationId } = req.params;
+      const deleted = await storage.deleteAnnotation(annotationId);
       if (!deleted) {
         return res.status(404).json({ message: "Annotation not found" });
       }
+
+      // Broadcast annotation deleted event
+      eventBroadcaster.broadcast(projectId, {
+        type: "annotation.deleted",
+        data: { annotationId },
+      });
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting annotation:", error);
