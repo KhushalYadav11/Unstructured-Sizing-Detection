@@ -422,13 +422,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate project exists
       const project = await storage.getProject(projectId);
       if (!project) {
-        files.forEach(f => cleanupFile(f.path));
+        for (const file of files) cleanupFile(file.path);
         return res.status(404).json({ message: "Project not found" });
       }
 
       // Validate file count
       if (files.length > 50) {
-        files.forEach(f => cleanupFile(f.path));
+        for (const file of files) cleanupFile(file.path);
         return res.status(422).json({
           message: "Validation failed",
           details: [{ field: "files", code: "too_many", message: "Maximum 50 photos allowed" }]
@@ -440,7 +440,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       for (const file of files) {
         // Validate MIME type
         if (!["image/jpeg", "image/png"].includes(file.mimetype)) {
-          files.forEach(f => cleanupFile(f.path));
+          for (const f of files) cleanupFile(f.path);
           return res.status(415).json({ message: "Unsupported media type" });
         }
 
