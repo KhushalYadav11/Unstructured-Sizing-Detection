@@ -376,6 +376,379 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   
+  // Photo Upload & Reconstruction
+  app.post("/api/projects/:projectId/photos", photoUpload.array("files[]", 50), async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const files = req.files as Express.Multer.File[];
+      const kickoff = req.body.kickoff !== "false"; // Default true
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ message: "No files uploaded" });
+      }
+
+      // Validate project exists
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        files.forEach(f => cleanupFile(f.path));
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Validate file count
+      if (files.length > 50) {
+        files.forEach(f => cleanupFile(f.path));
+        return res.status(422).json({
+          message: "Validation failed",
+          details: [{ field: "files", code: "too_many", message: "Maximum 50 photos allowed" }]
+        });
+      }
+
+      // Process photos with EXIF extraction
+      const photoRecords: InsertProjectPhoto[] = [];
+      for (const file of files) {
+        // Validate MIME type
+        if (!["image/jpeg", "image/png"].includes(file.mimetype)) {
+          files.forEach(f => cleanupFile(f.path));
+          return res.status(415).json({ message: "Unsupported media type" });
+        }
+
+        // Extract EXIF data
+        let exif: PhotoExif | null = null;
+        try {
+          const buffer = fs.readFileSync(file.path);
+          const parser = ExifParserFactory.create(buffer);
+          const result = parser.parse();
+          
+          exif = {
+            focalLength: result.tags?.FocalLength,
+            iso: result.tags?.ISO,
+            exposureTime: result.tags?.ExposureTime,
+            aperture: result.tags?.FNumber,
+            captureTimestamp: result.tags?.DateTimeOriginal ? new Date(result.tags.DateTimeOriginal * 1000) : undefined,
+          };
+
+          // Extract GPS if available
+          if (result.tags?.GPSLatitude && result.tags?.GPSLongitude) {
+            exif.gps = {
+              lat: result.tags.GPSLatitude,
+              lng: result.tags.GPSLongitude,
+              alt: result.tags.GPSAltitude,
+            };
+          }
+        } catch (err) {
+          console.warn("Failed to extract EXIF:", err);
+        }
+
+        // Compute content hash
+        const buffer = fs.readFileSync(file.path);
+        const contentHash = `sha256:${MemStorage.hashBuffer(buffer)}`;
+
+        // Generate storage key
+        const storageKey = MemStorage.buildStorageKey({
+          projectId,
+          type: "photo",
+          filename: file.filename,
+          extension: path.extname(file.originalname).slice(1),
+        });
+
+        photoRecords.push({
+          originalFilename: file.originalname,
+          contentHash,
+          mimeType: file.mimetype,
+          storageKey,
+          exif,
+        });
+      }
+
+      // Add photos to storage
+      const photos = await storage.addProjectPhotos(projectId, photoRecords);
+
+      // Create photogrammetry job if kickoff is true
+      let photogrammetryJob = null;
+      if (kickoff) {
+        try {
+          const job = await storage.createPhotogrammetryJob({
+            projectId,
+            status: "queued",
+          });
+          photogrammetryJob = {
+            id: job.id,
+            status: job.status,
+            queuedAt: job.queuedAt.toISOString(),
+            kickoff: true,
+          };
+
+          // Update project reconstruction status
+          await storage.updateProjectReconstruction(projectId, {
+            status: "queued",
+            latestJobId: job.id,
+          });
+        } catch (err) {
+          console.error("Failed to queue photogrammetry job:", err);
+          return res.status(503).json({ message: "Photogrammetry temporarily unavailable" });
+        }
+      }
+
+      res.status(201).json({
+        projectId,
+        photos: photos.map(p => ({
+          ...p,
+          uploadedAt: p.uploadedAt.toISOString(),
+          exif: p.exif ? {
+            ...p.exif,
+            captureTimestamp: p.exif.captureTimestamp?.toISOString(),
+          } : undefined,
+        })),
+        photogrammetryJob,
+      });
+    } catch (error) {
+      console.error("Error uploading photos:", error);
+      if (req.files) {
+        (req.files as Express.Multer.File[]).forEach(f => cleanupFile(f.path));
+      }
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.get("/api/projects/:projectId/reconstruction", async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const state = await storage.getProjectReconstructionState(projectId);
+      const latestJob = state.latestJobId ? await storage.getPhotogrammetryJob(state.latestJobId) : null;
+
+      res.json({
+        projectId,
+        status: state.status,
+        progress: state.progress ?? null,
+        currentStep: state.currentStep ?? null,
+        retryCount: latestJob?.retryCount ?? 0,
+        lastUpdatedAt: state.lastUpdatedAt?.toISOString() ?? null,
+        artifacts: state.artifacts ?? null,
+        latestJob: latestJob ? {
+          id: latestJob.id,
+          status: latestJob.status,
+          attempt: latestJob.attempt,
+          queuedAt: latestJob.queuedAt.toISOString(),
+          startedAt: latestJob.startedAt?.toISOString() ?? null,
+          finishedAt: latestJob.finishedAt?.toISOString() ?? null,
+          engine: latestJob.engine ?? null,
+          metrics: latestJob.metrics ?? null,
+          logs: latestJob.logs ?? null,
+        } : null,
+        failureReason: state.failureReason ?? null,
+      });
+    } catch (error) {
+      console.error("Error fetching reconstruction:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Viewer Measurements API
+  app.get("/api/projects/:projectId/measurements", async (req, res) => {
+    try {
+      const measurements = await storage.getViewerMeasurements(req.params.projectId);
+      res.json({
+        items: measurements.map(m => ({
+          ...m,
+          createdAt: m.createdAt.toISOString(),
+          updatedAt: m.updatedAt.toISOString(),
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching viewer measurements:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/measurements", async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const measurement = await storage.createViewerMeasurement({
+        projectId,
+        ...req.body,
+      });
+
+      res.status(201).json({
+        ...measurement,
+        createdAt: measurement.createdAt.toISOString(),
+        updatedAt: measurement.updatedAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error creating viewer measurement:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.patch("/api/projects/:projectId/measurements/:measurementId", async (req, res) => {
+    try {
+      const { measurementId } = req.params;
+      const updated = await storage.updateViewerMeasurement(measurementId, req.body);
+      
+      if (!updated) {
+        return res.status(404).json({ message: "Measurement not found" });
+      }
+
+      res.json({
+        ...updated,
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error updating viewer measurement:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/measurements/:measurementId", async (req, res) => {
+    try {
+      const deleted = await storage.deleteViewerMeasurement(req.params.measurementId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Measurement not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting viewer measurement:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Annotations API
+  app.get("/api/projects/:projectId/annotations", async (req, res) => {
+    try {
+      const annotations = await storage.getAnnotations(req.params.projectId);
+      res.json({
+        items: annotations.map(a => ({
+          ...a,
+          createdAt: a.createdAt.toISOString(),
+          updatedAt: a.updatedAt.toISOString(),
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching annotations:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/annotations", async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const annotation = await storage.createAnnotation({
+        projectId,
+        ...req.body,
+      });
+
+      res.status(201).json({
+        ...annotation,
+        createdAt: annotation.createdAt.toISOString(),
+        updatedAt: annotation.updatedAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error creating annotation:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.patch("/api/projects/:projectId/annotations/:annotationId", async (req, res) => {
+    try {
+      const { annotationId } = req.params;
+      const updated = await storage.updateAnnotation(annotationId, req.body);
+      
+      if (!updated) {
+        return res.status(404).json({ message: "Annotation not found" });
+      }
+
+      res.json({
+        ...updated,
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error updating annotation:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/annotations/:annotationId", async (req, res) => {
+    try {
+      const deleted = await storage.deleteAnnotation(req.params.annotationId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Annotation not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting annotation:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // Bookmarks API
+  app.get("/api/projects/:projectId/bookmarks", async (req, res) => {
+    try {
+      const bookmarks = await storage.getBookmarks(req.params.projectId);
+      res.json({
+        items: bookmarks.map(b => ({
+          ...b,
+          createdAt: b.createdAt.toISOString(),
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching bookmarks:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/bookmarks", async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const bookmark = await storage.createBookmark({
+        projectId,
+        ...req.body,
+      });
+
+      res.status(201).json({
+        ...bookmark,
+        createdAt: bookmark.createdAt.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error creating bookmark:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  app.delete("/api/projects/:projectId/bookmarks/:bookmarkId", async (req, res) => {
+    try {
+      const deleted = await storage.deleteBookmark(req.params.bookmarkId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Bookmark not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting bookmark:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
   // Serve mesh files
   app.get("/api/mesh/files/:filename", (req, res) => {
     const filename = req.params.filename;
