@@ -100,6 +100,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         width: meshResult.dimensions.width,
         height: meshResult.dimensions.height,
         volume: meshResult.volume,
+        weight: meshResult.weight,
         meshFileName: req.file.originalname,
         meshFilePath: req.file.path,
       });
