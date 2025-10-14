@@ -229,6 +229,7 @@ export const projects = pgTable("projects", {
   width: real("width"),
   height: real("height"),
   volume: real("volume"),
+  weight: real("weight"),
   meshFileName: text("mesh_file_name"),
   meshFilePath: text("mesh_file_path"),
   photos: jsonb("photos").$type<ProjectPhoto[]>().notNull().default(sql`'[]'::jsonb`),

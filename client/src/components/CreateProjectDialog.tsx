@@ -59,12 +59,19 @@ export function CreateProjectDialog({
         throw new Error(error.error || "Failed to create project");
       }
 
-      return response.json();
+      const payload = await response.json();
+
+      return {
+        project: {
+          ...payload.project,
+          weight: payload.meshAnalysis?.weight ?? payload.project?.weight ?? null,
+        },
+      };
     },
     onSuccess: (data) => {
       toast({
         title: "Project Created",
-        description: `${data.project.name} has been created successfully with extracted dimensions.`,
+        description: `${data.project.name} has been created successfully with extracted dimensions and weight.`,
       });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       onOpenChange(false);
