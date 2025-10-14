@@ -2,19 +2,19 @@ import fs from 'fs';
 import path from 'path';
 
 export interface MeshProcessingResult {
-  volume: number;
-  weight: number;
+  volume: number; // m³
+  weight: number; // kg
   vertices: number;
   faces: number;
-  surfaceArea: number;
+  surfaceArea: number; // m²
   boundingBox: {
     min: { x: number; y: number; z: number };
     max: { x: number; y: number; z: number };
   };
   dimensions: {
-    length: number;
-    width: number;
-    height: number;
+    length: number; // meters
+    width: number; // meters
+    height: number; // meters
   };
 }
 
