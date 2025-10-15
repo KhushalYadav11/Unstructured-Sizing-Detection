@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Ruler, Save } from "lucide-react";
+import { Ruler, Save, Scale } from "lucide-react";
+
+// Coal type definitions with densities in g/cm³
+export const COAL_TYPES = [
+  { id: "anthracite", name: "Anthracite", density: 1.5 },
+  { id: "bituminous", name: "Bituminous Coal", density: 1.3 },
+  { id: "sub-bituminous", name: "Sub-bituminous Coal", density: 1.2 },
+  { id: "lignite", name: "Lignite", density: 1.1 },
+  { id: "coking", name: "Coking Coal", density: 1.35 },
+  { id: "thermal", name: "Thermal Coal", density: 1.25 },
+];
 
 interface MeasurementPanelProps {
   onSave?: (data: MeasurementData) => void;
@@ -21,6 +31,8 @@ export interface MeasurementData {
   width: number;
   height: number;
   unit: string;
+  coalType?: string;
+  weight?: number;
 }
 
 export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
@@ -28,6 +40,31 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
   const [width, setWidth] = useState("");
   const [height, setHeight] = useState("");
   const [unit, setUnit] = useState("meters");
+  const [coalType, setCoalType] = useState("bituminous");
+  const [weight, setWeight] = useState<number | null>(null);
+
+  // Calculate weight whenever dimensions or coal type changes
+  useEffect(() => {
+    calculateWeight();
+  }, [length, width, height, coalType]);
+
+  const calculateWeight = () => {
+    const l = parseFloat(length) || 0;
+    const w = parseFloat(width) || 0;
+    const h = parseFloat(height) || 0;
+    
+    if (l > 0 && w > 0 && h > 0) {
+      const volume = l * w * h; // in cubic meters
+      const selectedCoal = COAL_TYPES.find(coal => coal.id === coalType);
+      if (selectedCoal) {
+        // Convert volume (m³) to cm³ and multiply by density (g/cm³) to get weight in grams
+        const weightInGrams = volume * 1000000 * selectedCoal.density;
+        setWeight(weightInGrams);
+      }
+    } else {
+      setWeight(null);
+    }
+  };
 
   const handleSave = () => {
     const data: MeasurementData = {
@@ -35,6 +72,8 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
       width: parseFloat(width) || 0,
       height: parseFloat(height) || 0,
       unit,
+      coalType,
+      weight: weight || undefined,
     };
     onSave?.(data);
     console.log("Measurement saved:", data);
@@ -98,6 +137,47 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
             data-testid="input-height"
           />
         </div>
+
+        <Button
+          className="w-full"
+          onClick={handleSave}
+          data-testid="button-save-measurement"
+        >
+          <Save className="h-4 w-4 mr-2" />
+          Save Measurement
+        </Button>
+        {/* Coal Type Selection */}
+        <div className="space-y-2">
+          <Label htmlFor="coal-type">Coal Type</Label>
+          <Select value={coalType} onValueChange={setCoalType} data-testid="select-coal-type">
+            <SelectTrigger id="coal-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COAL_TYPES.map((coal) => (
+                <SelectItem key={coal.id} value={coal.id}>
+                  {coal.name} ({coal.density} g/cm³)
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Weight Display */}
+        {weight !== null && (
+          <div className="rounded-md bg-muted p-3 space-y-1">
+            <div className="flex items-center gap-2">
+              <Scale className="h-4 w-4 text-primary" />
+              <div className="text-sm text-muted-foreground">Estimated Weight</div>
+            </div>
+            <div className="text-xl font-mono font-semibold" data-testid="text-estimated-weight">
+              {weight.toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+            </div>
+            <div className="text-xs text-muted-foreground pt-1">
+              Based on {COAL_TYPES.find(c => c.id === coalType)?.name} density
+            </div>
+          </div>
+        )}
 
         <Button
           className="w-full"

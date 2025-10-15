@@ -66,7 +66,7 @@ export default function Dashboard() {
         />
         <MetricCard
           title="Estimated Weight"
-          value={analytics ? `${analytics.totalWeight.toFixed(1)} MT` : "0 MT"}
+          value={analytics ? `${(analytics.totalWeight * 1000000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g` : "0 g"}
           subtitle="Total inventory"
           icon={Scale}
         />

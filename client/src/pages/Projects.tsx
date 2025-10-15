@@ -123,8 +123,8 @@ function ProjectCardWithStats({
       status={project.status}
       measurements={stats?.totalMeasurements || 0}
       lastUpdated={lastUpdated}
-      volume={project.volume || stats?.totalVolume}
-      weight={stats?.totalWeight}
+      volume={project.volume ?? stats?.totalVolume}
+      weight={project.weight ?? stats?.totalWeight}
       has3DModels={has3DModels}
       length={project.length}
       width={project.width}

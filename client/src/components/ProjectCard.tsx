@@ -119,19 +119,21 @@ export function ProjectCard({
           </div>
         )}
         
-        {volume && (
+        {(volume || weight) && (
           <div className="grid grid-cols-2 gap-3 pt-2 border-t">
-            <div>
-              <div className="text-xs text-muted-foreground">Volume</div>
-              <div className="font-mono font-semibold" data-testid="text-project-volume">
-                {volume.toFixed(2)} m³
+            {volume && (
+              <div>
+                <div className="text-xs text-muted-foreground">Volume</div>
+                <div className="font-mono font-semibold" data-testid="text-project-volume">
+                  {volume.toFixed(2)} m³
+                </div>
               </div>
-            </div>
+            )}
             {weight && (
               <div>
                 <div className="text-xs text-muted-foreground">Weight</div>
                 <div className="font-mono font-semibold" data-testid="text-project-weight">
-                  {weight.toFixed(2)} MT
+                  {weight.toLocaleString(undefined, { maximumFractionDigits: 0 })} g
                 </div>
               </div>
             )}

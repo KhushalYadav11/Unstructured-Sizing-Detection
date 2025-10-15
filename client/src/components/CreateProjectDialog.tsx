@@ -74,6 +74,7 @@ export function CreateProjectDialog({
         description: `${data.project.name} has been created successfully with extracted dimensions and weight.`,
       });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", data.project.id, "stats"] });
       onOpenChange(false);
       onSuccess?.(data.project);
     },
