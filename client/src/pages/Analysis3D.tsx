@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { CoalTypeSelector, COAL_TYPES } from "@/components/CoalTypeSelector";
 
 export default function Analysis3D() {
   const { toast } = useToast();
@@ -24,6 +25,9 @@ export default function Analysis3D() {
   // Extract project ID from URL
   const urlParams = new URLSearchParams(window.location.search);
   const projectId = urlParams.get('project');
+
+  // Local coal type state for weight analysis
+  const [coalType, setCoalType] = useState<string>("bituminous");
 
   // Fetch project details
   const { data: project, isLoading: isLoadingProject, error } = useQuery({
@@ -84,6 +88,21 @@ export default function Analysis3D() {
       window.open(meshUrl, '_blank');
     }
   };
+
+  // Compute volume in m³: prefer stored volume, else L×W×H
+  const computedVolumeM3: number | null = (typeof project.volume === 'number' && !isNaN(project.volume))
+    ? project.volume
+    : (project.length && project.width && project.height
+        ? project.length * project.width * project.height
+        : null);
+
+  // Selected coal density (g/cm³)
+  const selectedCoal = COAL_TYPES.find(c => c.id === coalType);
+
+  // Weight in grams using g/cm³ densities (m³ → cm³ = ×1,000,000)
+  const estimatedWeightGrams = (computedVolumeM3 && selectedCoal)
+    ? computedVolumeM3 * 1_000_000 * selectedCoal.density
+    : null;
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -211,6 +230,36 @@ export default function Analysis3D() {
                 <li>• {project.meshFileName ? `${(15273).toLocaleString()} vertices analyzed` : 'Mesh analysis'}</li>
               </ul>
             </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Weight Analysis Section */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <CoalTypeSelector value={coalType} onChange={setCoalType} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Estimated Weight</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {estimatedWeightGrams !== null ? (
+              <>
+                <div
+                  className="text-3xl font-mono font-bold text-primary"
+                  data-testid="text-overview-estimated-weight"
+                >
+                  {estimatedWeightGrams.toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Grams (Volume × Density: {selectedCoal?.density} g/cm³)
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Insufficient volume or dimensions to calculate weight.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

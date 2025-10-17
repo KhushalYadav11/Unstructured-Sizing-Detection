@@ -194,10 +194,10 @@ export default function Measurement() {
                   className="text-3xl font-mono font-bold text-primary"
                   data-testid="text-estimated-weight"
                 >
-                  {(calculatedData.weight * 1000000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+                  {(calculatedData.weight * 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Grams (Volume × Density: {calculatedData.coalDensity} g/cm³)
+                  Grams (Volume × Density: {calculatedData.coalDensity} kg/m³)
                 </p>
               </CardContent>
             </Card>
