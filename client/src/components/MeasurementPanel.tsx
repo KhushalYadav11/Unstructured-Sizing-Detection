@@ -11,16 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Ruler, Save, Scale } from "lucide-react";
-
-// Coal type definitions with densities in g/cm³
-export const COAL_TYPES = [
-  { id: "anthracite", name: "Anthracite", density: 1.5 },
-  { id: "bituminous", name: "Bituminous Coal", density: 1.3 },
-  { id: "sub-bituminous", name: "Sub-bituminous Coal", density: 1.2 },
-  { id: "lignite", name: "Lignite", density: 1.1 },
-  { id: "coking", name: "Coking Coal", density: 1.35 },
-  { id: "thermal", name: "Thermal Coal", density: 1.25 },
-];
+import { COAL_TYPES } from "@/components/CoalTypeSelector";
 
 interface MeasurementPanelProps {
   onSave?: (data: MeasurementData) => void;
@@ -57,8 +48,8 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
       const volume = l * w * h; // in cubic meters
       const selectedCoal = COAL_TYPES.find(coal => coal.id === coalType);
       if (selectedCoal) {
-        // Convert volume (m³) to cm³ and multiply by density (g/cm³) to get weight in grams
-        const weightInGrams = volume * 1000000 * selectedCoal.density;
+        // Convert kg from m³ × kg/m³ and then to grams
+        const weightInGrams = volume * selectedCoal.density * 1000;
         setWeight(weightInGrams);
       }
     } else {
@@ -156,7 +147,7 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
             <SelectContent>
               {COAL_TYPES.map((coal) => (
                 <SelectItem key={coal.id} value={coal.id}>
-                  {coal.name} ({coal.density} g/cm³)
+                  {coal.name} ({coal.density} kg/m³)
                 </SelectItem>
               ))}
             </SelectContent>
