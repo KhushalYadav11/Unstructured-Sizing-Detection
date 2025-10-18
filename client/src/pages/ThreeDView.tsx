@@ -10,11 +10,36 @@ import {
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert";
+import type { Unit } from "@/lib/three-utils";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
 
 export default function ThreeDView() {
   const [, setLocation] = useLocation();
   const [measurementMode, setMeasurementMode] = useState(false);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics | null>(null);
+  const [displayUnit, setDisplayUnit] = useState<Unit>("meters");
+
+  const metersPerUnit = displayUnit === "meters" ? 1 : displayUnit === "centimeters" ? 0.01 : 0.001;
+  const unitLabel = displayUnit === "meters" ? "m" : displayUnit === "centimeters" ? "cm" : "mm";
+  const volumeUnitLabel = displayUnit === "meters" ? "m³" : displayUnit === "centimeters" ? "cm³" : "mm³";
+
+  const lengthDisplay = modelMetrics ? modelMetrics.dimensions.length / metersPerUnit : 0;
+  const widthDisplay = modelMetrics ? modelMetrics.dimensions.width / metersPerUnit : 0;
+  const heightDisplay = modelMetrics ? modelMetrics.dimensions.height / metersPerUnit : 0;
+  const volumeDisplay = modelMetrics ? modelMetrics.volume / (metersPerUnit * metersPerUnit * metersPerUnit) : 0;
+
+  const minX = modelMetrics ? modelMetrics.boundingBox.min.x / metersPerUnit : 0;
+  const minY = modelMetrics ? modelMetrics.boundingBox.min.y / metersPerUnit : 0;
+  const minZ = modelMetrics ? modelMetrics.boundingBox.min.z / metersPerUnit : 0;
+  const maxX = modelMetrics ? modelMetrics.boundingBox.max.x / metersPerUnit : 0;
+  const maxY = modelMetrics ? modelMetrics.boundingBox.max.y / metersPerUnit : 0;
+  const maxZ = modelMetrics ? modelMetrics.boundingBox.max.z / metersPerUnit : 0;
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -79,29 +104,43 @@ export default function ThreeDView() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-sm text-muted-foreground">Display Units:</span>
+              <Select value={displayUnit} onValueChange={(v) => setDisplayUnit(v as Unit)}>
+                <SelectTrigger className="w-36">
+                  <SelectValue placeholder="Units" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="meters">meters</SelectItem>
+                  <SelectItem value="centimeters">centimeters</SelectItem>
+                  <SelectItem value="millimeters">millimeters</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Length (X)</p>
                 <p className="text-2xl font-bold">
-                  {modelMetrics.dimensions.length.toFixed(2)} m
+                  {lengthDisplay.toFixed(2)} {unitLabel}
                 </p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Width (Z)</p>
                 <p className="text-2xl font-bold">
-                  {modelMetrics.dimensions.width.toFixed(2)} m
+                  {widthDisplay.toFixed(2)} {unitLabel}
                 </p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Height (Y)</p>
                 <p className="text-2xl font-bold">
-                  {modelMetrics.dimensions.height.toFixed(2)} m
+                  {heightDisplay.toFixed(2)} {unitLabel}
                 </p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Volume</p>
                 <p className="text-2xl font-bold">
-                  {modelMetrics.volume.toFixed(2)} m³
+                  {volumeDisplay.toFixed(2)} {volumeUnitLabel}
                 </p>
               </div>
             </div>
@@ -115,7 +154,7 @@ export default function ThreeDView() {
               <div className="flex items-center justify-between text-sm mt-2">
                 <span className="text-muted-foreground">Bounding Box:</span>
                 <span className="font-mono text-xs">
-                  [{modelMetrics.boundingBox.min.x.toFixed(2)}, {modelMetrics.boundingBox.min.y.toFixed(2)}, {modelMetrics.boundingBox.min.z.toFixed(2)}] to [{modelMetrics.boundingBox.max.x.toFixed(2)}, {modelMetrics.boundingBox.max.y.toFixed(2)}, {modelMetrics.boundingBox.max.z.toFixed(2)}]
+                  [{minX.toFixed(2)}, {minY.toFixed(2)}, {minZ.toFixed(2)}] to [{maxX.toFixed(2)}, {maxY.toFixed(2)}, {maxZ.toFixed(2)}] ({unitLabel})
                 </span>
               </div>
             </div>
