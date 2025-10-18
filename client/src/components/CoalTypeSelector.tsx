@@ -8,15 +8,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Mountain } from "lucide-react";
+import { COAL_TYPES as SHARED_COAL_TYPES } from "@shared/schema";
 
-export const COAL_TYPES = [
-  { id: "anthracite", name: "Anthracite", density: 1.5 },
-  { id: "bituminous", name: "Bituminous Coal", density: 1.3 },
-  { id: "sub-bituminous", name: "Sub-bituminous Coal", density: 1.2 },
-  { id: "lignite", name: "Lignite", density: 1.1 },
-  { id: "coking", name: "Coking Coal", density: 1.35 },
-  { id: "thermal", name: "Thermal Coal", density: 1.25 },
-];
+export const COAL_TYPES = Object.entries(SHARED_COAL_TYPES).map(([id, cfg]) => ({
+  id,
+  name: cfg.name,
+  density: cfg.density,
+}));
 
 interface CoalTypeSelectorProps {
   value?: string;
@@ -58,7 +56,7 @@ export function CoalTypeSelector({ value, onChange }: CoalTypeSelectorProps) {
               className="text-2xl font-mono font-semibold"
               data-testid="text-coal-density"
             >
-              {selectedCoal.density} g/cm³
+              {selectedCoal.density} kg/m³
             </div>
             <div className="text-xs text-muted-foreground pt-1">
               Used for weight calculation: Weight = Volume × Density
