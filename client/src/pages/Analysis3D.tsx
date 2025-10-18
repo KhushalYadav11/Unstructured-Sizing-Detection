@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { CoalTypeSelector, COAL_TYPES } from "@/components/CoalTypeSelector";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 export default function Analysis3D() {
   const { toast } = useToast();
@@ -28,6 +29,7 @@ export default function Analysis3D() {
 
   // Local coal type state for weight analysis
   const [coalType, setCoalType] = useState<string>("bituminous");
+  const [weightUnit, setWeightUnit] = useState<'grams'|'tons'>("grams");
 
   // Fetch project details
   const { data: project, isLoading: isLoadingProject, error } = useQuery({
@@ -96,12 +98,15 @@ export default function Analysis3D() {
         ? project.length * project.width * project.height
         : null);
 
-  // Selected coal density (g/cm³)
+  // Selected coal density (kg/m³)
   const selectedCoal = COAL_TYPES.find(c => c.id === coalType);
 
-  // Weight in grams using g/cm³ densities (m³ → cm³ = ×1,000,000)
+  // Weight in grams using kg/m³ density (m³ × kg/m³ × 1000 → g)
   const estimatedWeightGrams = (computedVolumeM3 && selectedCoal)
-    ? computedVolumeM3 * 1_000_000 * selectedCoal.density
+    ? computedVolumeM3 * selectedCoal.density * 1000
+    : null;
+  const estimatedWeightTons = (computedVolumeM3 && selectedCoal)
+    ? (computedVolumeM3 * selectedCoal.density) / 1000
     : null;
 
   return (
@@ -249,10 +254,21 @@ export default function Analysis3D() {
                   className="text-3xl font-mono font-bold text-primary"
                   data-testid="text-overview-estimated-weight"
                 >
-                  {estimatedWeightGrams.toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+                  {weightUnit === "grams"
+                    ? estimatedWeightGrams!.toLocaleString(undefined, { maximumFractionDigits: 0 }) + " g"
+                    : (estimatedWeightTons ?? 0).toLocaleString(undefined, { maximumFractionDigits: 3 }) + " t"}
+                </div>
+                <div className="flex items-center justify-end mt-2">
+                  <Select value={weightUnit} onValueChange={(v) => setWeightUnit(v as 'grams'|'tons')}>
+                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="grams">Grams</SelectItem>
+                      <SelectItem value="tons">Metric Tons</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Grams (Volume × Density: {selectedCoal?.density} g/cm³)
+                  {weightUnit === 'grams' ? 'Grams' : 'Metric tons'} (Volume × Density: {selectedCoal?.density} kg/m³)
                 </p>
               </>
             ) : (

@@ -14,6 +14,7 @@ import { getProject, createMeasurement, calculate } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
 export default function Measurement() {
   const [, params] = useRoute("/measurement/:id");
@@ -190,14 +191,25 @@ export default function Measurement() {
                 <CardTitle>Estimated Weight</CardTitle>
               </CardHeader>
               <CardContent>
-                <div
-                  className="text-3xl font-mono font-bold text-primary"
-                  data-testid="text-estimated-weight"
-                >
-                  {(calculatedData.weight * 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+                <div className="flex items-center justify-between">
+                  <div
+                    className="text-3xl font-mono font-bold text-primary"
+                    data-testid="text-estimated-weight"
+                  >
+                    {weightUnit === 'grams'
+                      ? (calculatedData.weight * 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' g'
+                      : (calculatedData.weight / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + ' t'}
+                  </div>
+                  <Select value={weightUnit} onValueChange={(v) => setWeightUnit(v as 'grams'|'tons')}>
+                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="grams">Grams</SelectItem>
+                      <SelectItem value="tons">Metric Tons</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Grams (Volume × Density: {calculatedData.coalDensity} kg/m³)
+                  {weightUnit === 'grams' ? 'Grams' : 'Metric tons'} (Volume × Density: {calculatedData.coalDensity} kg/m³)
                 </p>
               </CardContent>
             </Card>
@@ -207,3 +219,5 @@ export default function Measurement() {
     </div>
   );
 }
+
+const [weightUnit, setWeightUnit] = useState<'grams'|'tons'>("grams");
