@@ -29,6 +29,7 @@ export default function Measurement() {
     quality: string;
     coalDensity: number;
   } | null>(null);
+  const [weightUnit, setWeightUnit] = useState<'grams'|'tons'>("grams");
 
   const { data: project, isLoading } = useQuery({
     queryKey: ["/api/projects", params?.id],
@@ -219,5 +220,3 @@ export default function Measurement() {
     </div>
   );
 }
-
-const [weightUnit, setWeightUnit] = useState<'grams'|'tons'>("grams");
