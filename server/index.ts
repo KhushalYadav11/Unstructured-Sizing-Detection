@@ -18,8 +18,56 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Security middleware
+// Rate limiting
+const rateLimit = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT = 100; // requests per window
+const RATE_WINDOW = 15 * 60 * 1000; // 15 minutes in milliseconds
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
+
 app.use((req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const clientData = rateLimit.get(ip) || { count: 0, resetTime: now + RATE_WINDOW };
+
+  // Reset counter if window has expired
+  if (now > clientData.resetTime) {
+    clientData.count = 0;
+    clientData.resetTime = now + RATE_WINDOW;
+  }
+
+  if (clientData.count >= RATE_LIMIT) {
+    return res.status(429).json({
+      error: 'Too many requests',
+      retryAfter: Math.ceil((clientData.resetTime - now) / 1000)
+    });
+  }
+
+  clientData.count++;
+  rateLimit.set(ip, clientData);
+
+  // Cleanup old upload files periodically
+  if (!(global as any).cleanup) {
+    (global as any).cleanup = setInterval(() => {
+      const uploadPath = path.join(__dirname, "../uploads");
+      fs.readdir(uploadPath, (err, files) => {
+        if (err) return;
+        const now = Date.now();
+        files.forEach(file => {
+          const filePath = path.join(uploadPath, file);
+          fs.stat(filePath, (err, stats) => {
+            if (err) return;
+            // Remove files older than 24 hours
+            if (now - stats.mtimeMs > 24 * 60 * 60 * 1000) {
+              fs.unlink(filePath, () => {});
+            }
+          });
+        });
+      });
+    }, CLEANUP_INTERVAL);
+  }
+
+  next();
+
   // Set security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
