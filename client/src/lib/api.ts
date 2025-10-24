@@ -1,11 +1,37 @@
 import type { Project, Measurement, InsertProject, InsertMeasurement } from "@shared/schema";
 
 const API_BASE = "/api";
+const TIMEOUT = 30000; // 30 seconds
+
+async function fetchWithTimeout(
+  input: RequestInfo,
+  init?: RequestInit
+): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), TIMEOUT);
+  
+  try {
+    const response = await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw await APIError.fromResponse(response);
+    }
+    return response;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new APIError("Request timeout", 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 // Projects
 export async function getProjects(): Promise<Project[]> {
-  const response = await fetch(`${API_BASE}/projects`);
-  if (!response.ok) throw new Error("Failed to fetch projects");
+  const response = await fetchWithTimeout(`${API_BASE}/projects`);
   return response.json();
 }
 
