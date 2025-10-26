@@ -1,4 +1,5 @@
 import type { Project, Measurement, InsertProject, InsertMeasurement } from "@shared/schema";
+import { APIError } from "./api-error";
 
 const API_BASE = "/api";
 const TIMEOUT = 30000; // 30 seconds
