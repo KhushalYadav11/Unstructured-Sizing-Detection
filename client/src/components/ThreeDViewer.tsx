@@ -520,14 +520,16 @@ export function ThreeDViewer({
     const { renderer, controls } = sceneRef.current;
     if (!renderer || !controls) return;
     if (measurementMode) {
-      renderer.domElement.addEventListener("pointerdown", handleMeasureClick);
+      renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.addEventListener("pointerup", handlePointerUp);
       renderer.domElement.addEventListener("pointermove", handleMeasureMove);
       return () => {
-        renderer.domElement.removeEventListener("pointerdown", handleMeasureClick);
+        renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+        renderer.domElement.removeEventListener("pointerup", handlePointerUp);
         renderer.domElement.removeEventListener("pointermove", handleMeasureMove);
       };
     }
-  }, [measurementMode, handleMeasureClick, handleMeasureMove]);
+  }, [measurementMode, handlePointerDown, handlePointerUp, handleMeasureMove]);
 
   // Display unit conversion factors and labels
   const metersPerUnit = unit === "meters" ? 1 : unit === "centimeters" ? 0.01 : 0.001;
@@ -688,7 +690,7 @@ export function ThreeDViewer({
               Undo
             </Button>
           </div>
-          <div>Hold Shift and click to measure; hover with Shift shows preview.</div>
+          <div>Click (no drag) to measure; hold Shift to preview.</div>
           {measurementDisplay !== null ? (
             <div>
               Last segment: <span className="font-bold">{measurementDisplay.toFixed(3)} {unitLabel}</span>
@@ -709,3 +711,183 @@ export function ThreeDViewer({
     </div>
 );
 }
+
+// Add drag detection refs
+const downPosRef = useRef<{ x: number; y: number } | null>(null);
+const isDraggingRef = useRef(false);
+
+// New: record pointer down for click-vs-drag detection
+const handlePointerDown = useCallback((ev: PointerEvent) => {
+  if (ev.button !== 0) return;
+  isDraggingRef.current = false;
+  downPosRef.current = { x: ev.clientX, y: ev.clientY };
+}, []);
+
+// Update: preview move also updates drag detection threshold
+const handleMeasureMove = useCallback((ev: PointerEvent) => {
+  // Mark as dragging if movement exceeds threshold after a pointerdown
+  if (downPosRef.current) {
+    const dx = Math.abs(ev.clientX - downPosRef.current.x);
+    const dy = Math.abs(ev.clientY - downPosRef.current.y);
+    if (dx > 5 || dy > 5) isDraggingRef.current = true;
+  }
+  // Require Shift to show preview and ignore while dragging (buttons!=0)
+  if (measurementPoints.length === 0 || !ev.shiftKey || ev.buttons !== 0) return;
+  const { renderer, camera, modelRoot } = sceneRef.current;
+  if (!renderer || !camera || !modelRoot) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+  mouseRef.current.set(x, y);
+  raycasterRef.current.setFromCamera(mouseRef.current, camera);
+  const intersects = raycasterRef.current.intersectObject(modelRoot, true);
+  if (intersects.length > 0) {
+    const intersect = intersects[0];
+    const start = measurementPoints[measurementPoints.length - 1];
+    let candidate = intersect.point.clone();
+
+    if (snapToVertex) {
+      const mesh = intersect.object as THREE.Mesh;
+      const geom = mesh.geometry as THREE.BufferGeometry;
+      const index = geom.getIndex();
+      const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
+      const faceIndex = intersect.faceIndex ?? 0;
+      let ai: number, bi: number, ci: number;
+      if (index) {
+        const base = faceIndex * 3;
+        ai = index.getX(base);
+        bi = index.getX(base + 1);
+        ci = index.getX(base + 2);
+      } else {
+        ai = intersect.face?.a ?? 0;
+        bi = intersect.face?.b ?? 1;
+        ci = intersect.face?.c ?? 2;
+      }
+      const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
+      const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
+      const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
+      const dA = candidate.distanceTo(a);
+      const dB = candidate.distanceTo(b);
+      const dC = candidate.distanceTo(c);
+      candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
+    }
+
+    if (axisAlign) {
+      const delta = candidate.clone().sub(start);
+      const ax = Math.abs(delta.x);
+      const ay = Math.abs(delta.y);
+      const az = Math.abs(delta.z);
+      if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
+      else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
+      else candidate.set(start.x, start.y, start.z + delta.z);
+    }
+
+    const { scene, modelRoot: mr } = sceneRef.current;
+    if (!scene || !mr) return;
+    if (previewLineRef.current) {
+      scene.remove(previewLineRef.current);
+      (previewLineRef.current.geometry as THREE.BufferGeometry).dispose();
+      (previewLineRef.current.material as THREE.Material).dispose();
+      previewLineRef.current = null;
+    }
+    // Scale dash size relative to model size so it remains visible across units
+    const bbox = new THREE.Box3().setFromObject(mr);
+    const maxDim = bbox.getSize(new THREE.Vector3());
+    const dash = Math.max(0.005, Math.max(maxDim.x, maxDim.y, maxDim.z) * 0.01);
+    const geom = new THREE.BufferGeometry().setFromPoints([start.clone(), candidate.clone()]);
+    const mat = new THREE.LineDashedMaterial({ color: 0x66ccff, dashSize: dash, gapSize: dash * 0.5 });
+    const line = new THREE.Line(geom, mat);
+    line.computeLineDistances();
+    previewLineRef.current = line;
+    scene.add(line);
+    setMeasurementDistance(start.distanceTo(candidate));
+  }
+}, [measurementPoints, snapToVertex, axisAlign]);
+
+// New: place points on click when not dragging
+const handlePointerUp = useCallback((ev: PointerEvent) => {
+  if (ev.button !== 0) return;
+  const dp = downPosRef.current;
+  const moved = dp ? Math.hypot(ev.clientX - dp.x, ev.clientY - dp.y) > 5 : false;
+  const wasDragging = isDraggingRef.current || moved;
+  downPosRef.current = null;
+  isDraggingRef.current = false;
+  if (wasDragging) return; // treat as rotation/pan; do not place point
+
+  const { renderer, camera, modelRoot } = sceneRef.current;
+  if (!renderer || !camera || !modelRoot) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+  mouseRef.current.set(x, y);
+  raycasterRef.current.setFromCamera(mouseRef.current, camera);
+
+  const intersects = raycasterRef.current.intersectObject(modelRoot, true);
+  if (intersects.length > 0) {
+    const intersect = intersects[0];
+    const start = measurementPoints.length > 0 ? measurementPoints[measurementPoints.length - 1] : undefined;
+    let candidate = intersect.point.clone();
+
+    if (snapToVertex) {
+      const mesh = intersect.object as THREE.Mesh;
+      const geom = mesh.geometry as THREE.BufferGeometry;
+      const index = geom.getIndex();
+      const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
+      const faceIndex = intersect.faceIndex ?? 0;
+      let ai: number, bi: number, ci: number;
+      if (index) {
+        const base = faceIndex * 3;
+        ai = index.getX(base);
+        bi = index.getX(base + 1);
+        ci = index.getX(base + 2);
+      } else {
+        ai = intersect.face?.a ?? 0;
+        bi = intersect.face?.b ?? 1;
+        ci = intersect.face?.c ?? 2;
+      }
+      const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
+      const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
+      const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
+      const dA = candidate.distanceTo(a);
+      const dB = candidate.distanceTo(b);
+      const dC = candidate.distanceTo(c);
+      candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
+    }
+
+    if (axisAlign && start) {
+      const delta = candidate.clone().sub(start);
+      const ax = Math.abs(delta.x);
+      const ay = Math.abs(delta.y);
+      const az = Math.abs(delta.z);
+      if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
+      else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
+      else candidate.set(start.x, start.y, start.z + delta.z);
+    }
+
+    if (!isChainMode && measurementPoints.length >= 2) {
+      resetMeasurement();
+    }
+    addMeasurementPoint(candidate);
+  }
+}, [addMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
+useEffect(() => {
+  const { renderer, controls } = sceneRef.current;
+  if (!renderer || !controls) return;
+  if (measurementMode) {
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
+    renderer.domElement.addEventListener("pointermove", handleMeasureMove);
+    return () => {
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+      renderer.domElement.removeEventListener("pointermove", handleMeasureMove);
+    };
+  }
+}, [measurementMode, handlePointerDown, handlePointerUp, handleMeasureMove]);
+
+// Update overlay instructions
+// <div>Hold Shift and click to measure; hover with Shift shows preview.</div>
+// becomes:
+// <div>Click (no drag) to measure; hold Shift to preview.</div>
