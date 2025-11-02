@@ -71,7 +71,9 @@ export default function ThreeDView() {
         <Info className="h-4 w-4" />
         <AlertTitle>How to Use</AlertTitle>
         <AlertDescription>
-          Upload a 3D model file using the "Upload Model" button. Use orbit controls to rotate (left-click drag), pan (right-click drag), and zoom (scroll wheel). Select the appropriate unit for your model before uploading.
+          Upload a 3D model using the "Upload Model" button. Use orbit controls to rotate (left-click drag), pan (right-click drag), and zoom (scroll wheel). Select units before uploading.
+          
+          When Measurement Mode is enabled: Click (without dragging) to place points. Hold Shift while moving to preview the next segment. Use Chain to accumulate multiple segments, Axis Align to lock along the dominant axis, and Snap Vertex to snap to triangle vertices. Undo via the button or press Ctrl+Z; Redo via the button or press Ctrl+Y/Ctrl+Shift+Z. Dragging is treated as camera control and will not place points.
         </AlertDescription>
       </Alert>
 

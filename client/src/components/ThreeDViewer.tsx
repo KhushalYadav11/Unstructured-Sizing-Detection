@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Button } from "@/components/ui/button";
 import { RotateCw, ZoomIn, ZoomOut, Maximize2, Ruler, Upload } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   loadObjectFromFile,
   scaleObjectToUnit,
@@ -18,6 +19,9 @@ import {
   SelectItem,
   SelectValue,
 } from "@/components/ui/select";
+
+// Drag threshold in pixels to differentiate click vs drag
+const DRAG_THRESHOLD = 5;
 
 interface ThreeDViewerProps {
   modelLoaded?: boolean; // legacy flag; not required anymore
@@ -48,6 +52,7 @@ export function ThreeDViewer({
   const previewLineRef = useRef<THREE.Line | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
+  const redoStackRef = useRef<THREE.Vector3[]>([]);
 
   const sceneRef = useRef<{
     scene?: THREE.Scene;
@@ -142,6 +147,10 @@ export function ThreeDViewer({
         }
         // Properly dispose of Three.js resources
         if (renderer) {
+          // Force WebGL context loss to prevent GPU memory leaks
+          if (typeof (renderer as any).forceContextLoss === 'function') {
+            (renderer as any).forceContextLoss();
+          }
           renderer.dispose();
           if (containerRef.current && renderer.domElement) {
             containerRef.current.removeChild(renderer.domElement);
@@ -149,6 +158,38 @@ export function ThreeDViewer({
         }
         // Dispose of controls
         controls?.dispose();
+        // Dispose of textures on materials to prevent GPU leaks
+        scene.traverse((object) => {
+          if (object instanceof THREE.Mesh) {
+            const disposeMaps = (material: THREE.Material) => {
+              const m = material as any;
+              const maps = [
+                "map",
+                "normalMap",
+                "roughnessMap",
+                "metalnessMap",
+                "aoMap",
+                "emissiveMap",
+                "displacementMap",
+                "alphaMap",
+                "envMap",
+                "specularMap",
+                "lightMap",
+              ];
+              maps.forEach((key) => {
+                const tex = m?.[key];
+                if (tex && tex.isTexture) {
+                  tex.dispose();
+                }
+              });
+            };
+            if (Array.isArray(object.material)) {
+              object.material.forEach((material) => disposeMaps(material));
+            } else {
+              disposeMaps(object.material as THREE.Material);
+            }
+          }
+        });
         // Dispose of geometries and materials
         scene.traverse((object) => {
           if (object instanceof THREE.Mesh) {
@@ -194,6 +235,31 @@ export function ThreeDViewer({
     modelRoot.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
       if (mesh.isMesh) {
+        // dispose textures first
+        const disposeMaps = (material: THREE.Material) => {
+          const m = material as any;
+          const maps = [
+            "map",
+            "normalMap",
+            "roughnessMap",
+            "metalnessMap",
+            "aoMap",
+            "emissiveMap",
+            "displacementMap",
+            "alphaMap",
+            "envMap",
+            "specularMap",
+            "lightMap",
+          ];
+          maps.forEach((key) => {
+            const tex = m?.[key];
+            if (tex && tex.isTexture) {
+              tex.dispose();
+            }
+          });
+        };
+        if (Array.isArray(mesh.material)) mesh.material.forEach((m) => disposeMaps(m));
+        else disposeMaps(mesh.material as THREE.Material);
         mesh.geometry.dispose();
         if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
         else (mesh.material as THREE.Material).dispose();
@@ -218,6 +284,7 @@ export function ThreeDViewer({
     }
     setMeasurementPoints([]);
     setMeasurementDistance(null);
+    redoStackRef.current = [];
   }, []);
 
   const handleFiles = useCallback(async (files: FileList | null) => {
@@ -289,6 +356,9 @@ export function ThreeDViewer({
     marker.position.copy(point);
     scene.add(marker);
     measurementMarkersRef.current.push(marker);
+
+    // Clear redo stack on new actions
+    redoStackRef.current = [];
 
     setMeasurementPoints((prev) => {
       let next = prev;
@@ -380,68 +450,71 @@ export function ThreeDViewer({
     setCumulativeDistance(null);
   }, []);
 
-  const handleMeasureClick = useCallback((ev: PointerEvent) => {
-    // Require Shift + Left Click to add measurement points to avoid rotation conflicts
-    if (!ev.shiftKey || ev.button !== 0) return;
-    const { renderer, camera, modelRoot } = sceneRef.current;
-    if (!renderer || !camera || !modelRoot) return;
-
-    const rect = renderer.domElement.getBoundingClientRect();
-    const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
-    mouseRef.current.set(x, y);
-    raycasterRef.current.setFromCamera(mouseRef.current, camera);
-
-    const intersects = raycasterRef.current.intersectObject(modelRoot, true);
-    if (intersects.length > 0) {
-      const intersect = intersects[0];
-      const start = measurementPoints.length > 0 ? measurementPoints[measurementPoints.length - 1] : undefined;
-      let candidate = intersect.point.clone();
-
-      if (snapToVertex) {
-        const mesh = intersect.object as THREE.Mesh;
-        const geom = mesh.geometry as THREE.BufferGeometry;
-        const index = geom.getIndex();
-        const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
-        const faceIndex = intersect.faceIndex ?? 0;
-        let ai: number, bi: number, ci: number;
-        if (index) {
-          const base = faceIndex * 3;
-          ai = index.getX(base);
-          bi = index.getX(base + 1);
-          ci = index.getX(base + 2);
-        } else {
-          ai = intersect.face?.a ?? 0;
-          bi = intersect.face?.b ?? 1;
-          ci = intersect.face?.c ?? 2;
-        }
-        const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
-        const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
-        const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
-        const dA = candidate.distanceTo(a);
-        const dB = candidate.distanceTo(b);
-        const dC = candidate.distanceTo(c);
-        candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
-      }
-
-      if (axisAlign && start) {
-        const delta = candidate.clone().sub(start);
-        const ax = Math.abs(delta.x);
-        const ay = Math.abs(delta.y);
-        const az = Math.abs(delta.z);
-        if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
-        else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
-        else candidate.set(start.x, start.y, start.z + delta.z);
-      }
-
-      if (!isChainMode && measurementPoints.length >= 2) {
-        resetMeasurement();
-      }
-      addMeasurementPoint(candidate);
+  const undoLastPoint = useCallback(() => {
+    const { scene } = sceneRef.current;
+    if (!scene || measurementMarkersRef.current.length === 0) return;
+    const last = measurementMarkersRef.current.pop();
+    if (last) {
+      // push to redo stack
+      redoStackRef.current.push(last.position.clone());
+      scene.remove(last);
+      last.geometry.dispose();
+      (last.material as THREE.Material).dispose();
     }
-  }, [addMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
+    setMeasurementPoints((prev) => {
+      const updated = prev.slice(0, -1);
+      const { scene } = sceneRef.current;
+      if (!scene) return updated;
+      if (measurementLineRef.current) {
+        scene.remove(measurementLineRef.current);
+        (measurementLineRef.current.geometry as THREE.BufferGeometry).dispose();
+        (measurementLineRef.current.material as THREE.Material).dispose();
+        measurementLineRef.current = null;
+      }
+      if (isChainMode) {
+        if (updated.length >= 2) {
+          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
+          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+          const line = new THREE.Line(lineGeom, lineMat);
+          measurementLineRef.current = line;
+          scene.add(line);
+          let sum = 0;
+          for (let i = 1; i < updated.length; i++) sum += updated[i - 1].distanceTo(updated[i]);
+          setCumulativeDistance(sum);
+          setMeasurementDistance(updated.length >= 2 ? updated[updated.length - 2].distanceTo(updated[updated.length - 1]) : null);
+        } else {
+          setCumulativeDistance(null);
+          setMeasurementDistance(null);
+        }
+      } else {
+        if (updated.length === 2) {
+          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
+          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+          const line = new THREE.Line(lineGeom, lineMat);
+          measurementLineRef.current = line;
+          scene.add(line);
+          setMeasurementDistance(updated[0].distanceTo(updated[1]));
+        } else {
+          setMeasurementDistance(null);
+        }
+      }
+      return updated;
+    });
+  }, [isChainMode]);
+
+  const redoLastPoint = useCallback(() => {
+    const pt = redoStackRef.current.pop();
+    if (!pt) return;
+    addMeasurementPoint(pt);
+  }, [addMeasurementPoint]);
 
   const handleMeasureMove = useCallback((ev: PointerEvent) => {
+    // Mark as dragging if movement exceeds threshold after a pointerdown
+    if (downPosRef.current) {
+      const dx = Math.abs(ev.clientX - downPosRef.current.x);
+      const dy = Math.abs(ev.clientY - downPosRef.current.y);
+      if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) isDraggingRef.current = true;
+    }
     // Require Shift to show preview and ignore while dragging (buttons!=0)
     if (measurementPoints.length === 0 || !ev.shiftKey || ev.buttons !== 0) return;
     const { renderer, camera, modelRoot } = sceneRef.current;
@@ -516,17 +589,118 @@ export function ThreeDViewer({
     }
   }, [measurementPoints, snapToVertex, axisAlign]);
 
+  // Drag detection refs and handlers
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isDraggingRef = useRef(false);
+
+  const handlePointerDown = useCallback((ev: PointerEvent) => {
+    if (ev.button !== 0) return;
+    isDraggingRef.current = false;
+    downPosRef.current = { x: ev.clientX, y: ev.clientY };
+  }, []);
+
+  const handlePointerUp = useCallback((ev: PointerEvent) => {
+    if (ev.button !== 0) return;
+    const dp = downPosRef.current;
+    const moved = dp ? Math.hypot(ev.clientX - dp.x, ev.clientY - dp.y) > DRAG_THRESHOLD : false;
+    const wasDragging = isDraggingRef.current || moved;
+    downPosRef.current = null;
+    isDraggingRef.current = false;
+    if (wasDragging) return; // treat as rotation/pan; do not place point
+
+    const { renderer, camera, modelRoot } = sceneRef.current;
+    if (!renderer || !camera || !modelRoot) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+    mouseRef.current.set(x, y);
+    raycasterRef.current.setFromCamera(mouseRef.current, camera);
+
+    const intersects = raycasterRef.current.intersectObject(modelRoot, true);
+    if (intersects.length > 0) {
+      const intersect = intersects[0];
+      const start = measurementPoints.length > 0 ? measurementPoints[measurementPoints.length - 1] : undefined;
+      let candidate = intersect.point.clone();
+
+      if (snapToVertex) {
+        const mesh = intersect.object as THREE.Mesh;
+        const geom = mesh.geometry as THREE.BufferGeometry;
+        const index = geom.getIndex();
+        const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
+        const faceIndex = intersect.faceIndex ?? 0;
+        let ai: number, bi: number, ci: number;
+        if (index) {
+          const base = faceIndex * 3;
+          ai = index.getX(base);
+          bi = index.getX(base + 1);
+          ci = index.getX(base + 2);
+        } else {
+          ai = intersect.face?.a ?? 0;
+          bi = intersect.face?.b ?? 1;
+          ci = intersect.face?.c ?? 2;
+        }
+        const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
+        const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
+        const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
+        const dA = candidate.distanceTo(a);
+        const dB = candidate.distanceTo(b);
+        const dC = candidate.distanceTo(c);
+        candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
+      }
+
+      if (axisAlign && start) {
+        const delta = candidate.clone().sub(start);
+        const ax = Math.abs(delta.x);
+        const ay = Math.abs(delta.y);
+        const az = Math.abs(delta.z);
+        if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
+        else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
+        else candidate.set(start.x, start.y, start.z + delta.z);
+      }
+
+      if (!isChainMode && measurementPoints.length >= 2) {
+        resetMeasurement();
+      }
+      addMeasurementPoint(candidate);
+    }
+  }, [addMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
+
   useEffect(() => {
     const { renderer, controls } = sceneRef.current;
     if (!renderer || !controls) return;
     if (measurementMode) {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        const key = e.key.toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          undoLastPoint();
+        } else if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) {
+          e.preventDefault();
+          redoLastPoint();
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
       renderer.domElement.addEventListener("pointerdown", handlePointerDown);
       renderer.domElement.addEventListener("pointerup", handlePointerUp);
       renderer.domElement.addEventListener("pointermove", handleMeasureMove);
+      const handlePointerCancel = () => {
+        downPosRef.current = null;
+        isDraggingRef.current = false;
+      };
+      const handlePointerLeave = () => {
+        downPosRef.current = null;
+        isDraggingRef.current = false;
+      };
+      renderer.domElement.addEventListener("pointercancel", handlePointerCancel);
+      renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
       return () => {
         renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
         renderer.domElement.removeEventListener("pointerup", handlePointerUp);
         renderer.domElement.removeEventListener("pointermove", handleMeasureMove);
+        window.removeEventListener('keydown', handleKeyDown);
+        renderer.domElement.removeEventListener("pointercancel", handlePointerCancel);
+        renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       };
     }
   }, [measurementMode, handlePointerDown, handlePointerUp, handleMeasureMove]);
@@ -545,6 +719,7 @@ export function ThreeDViewer({
   const cumulativeDisplay = cumulativeDistance !== null ? (cumulativeDistance / metersPerUnit) : null;
 
   return (
+    <TooltipProvider>
     <div className="relative h-full w-full bg-gray-950 rounded-md overflow-hidden">
       <div ref={containerRef} className="w-full h-full" />
       
@@ -562,65 +737,90 @@ export function ThreeDViewer({
       )}
       
       <div className="absolute top-4 right-4 flex flex-col gap-2">
-        <Button
-          variant="secondary"
-          size="icon"
-          onClick={() => setIsRotating(!isRotating)}
-          data-testid="button-rotation-toggle"
-        >
-          <RotateCw className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          data-testid="button-zoom-in"
-          onClick={() => {
-            const { camera, controls } = sceneRef.current;
-            if (!camera || !controls) return;
-            const dir = new THREE.Vector3();
-            camera.getWorldDirection(dir);
-            const step = 0.1 * camera.position.distanceTo(controls.target);
-            camera.position.add(dir.multiplyScalar(-step));
-            controls.update();
-          }}
-        >
-          <ZoomIn className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          data-testid="button-zoom-out"
-          onClick={() => {
-            const { camera, controls } = sceneRef.current;
-            if (!camera || !controls) return;
-            const dir = new THREE.Vector3();
-            camera.getWorldDirection(dir);
-            const step = 0.1 * camera.position.distanceTo(controls.target);
-            camera.position.add(dir.multiplyScalar(step));
-            controls.update();
-          }}
-        >
-          <ZoomOut className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          data-testid="button-fullscreen"
-          onClick={() => containerRef.current?.requestFullscreen().catch(() => {})}
-        >
-          <Maximize2 className="h-4 w-4" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              onClick={() => setIsRotating(!isRotating)}
+              data-testid="button-rotation-toggle"
+            >
+              <RotateCw className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Toggle auto-rotate</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              data-testid="button-zoom-in"
+              onClick={() => {
+                const { camera, controls } = sceneRef.current;
+                if (!camera || !controls) return;
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                const step = 0.1 * camera.position.distanceTo(controls.target);
+                camera.position.add(dir.multiplyScalar(-step));
+                controls.update();
+              }}
+            >
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Zoom in</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              data-testid="button-zoom-out"
+              onClick={() => {
+                const { camera, controls } = sceneRef.current;
+                if (!camera || !controls) return;
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                const step = 0.1 * camera.position.distanceTo(controls.target);
+                camera.position.add(dir.multiplyScalar(step));
+                controls.update();
+              }}
+            >
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Zoom out</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              data-testid="button-fullscreen"
+              onClick={() => containerRef.current?.requestFullscreen().catch(() => {})}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Enter fullscreen</TooltipContent>
+        </Tooltip>
       </div>
       
       <div className="absolute bottom-4 right-4">
-        <Button
-          variant={measurementMode ? "default" : "secondary"}
-          onClick={onMeasurementToggle}
-          data-testid="button-measurement-mode"
-        >
-          <Ruler className="h-4 w-4 mr-2" />
-          {measurementMode ? "Exit Measurement" : "Measurement Mode"}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={measurementMode ? "default" : "secondary"}
+              onClick={onMeasurementToggle}
+              data-testid="button-measurement-mode"
+            >
+              <Ruler className="h-4 w-4 mr-2" />
+              {measurementMode ? "Exit Measurement" : "Measurement Mode"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Toggle measurement mode</TooltipContent>
+        </Tooltip>
       </div>
       
       {/* Unit selector and uploader */}
@@ -667,28 +867,46 @@ export function ThreeDViewer({
         <div className="absolute bottom-24 left-4 text-xs font-mono text-muted-foreground bg-primary/10 border border-primary/20 backdrop-blur px-3 py-2 rounded space-y-1">
           <div className="font-semibold">Measurement Mode</div>
           <div className="flex gap-2 py-1">
-            <Button variant={isChainMode ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setIsChainMode(v => !v)}>
-              Chain
-            </Button>
-            <Button variant={axisAlign ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setAxisAlign(v => !v)}>
-              Axis Align
-            </Button>
-            <Button variant={snapToVertex ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setSnapToVertex(v => !v)}>
-              Snap Vertex
-            </Button>
-            <Button variant="ghost" size="sm" className="text-xs" onClick={() => {
-              const { scene } = sceneRef.current;
-              if (!scene || measurementMarkersRef.current.length === 0) return;
-              const last = measurementMarkersRef.current.pop();
-              if (last) {
-                scene.remove(last);
-                last.geometry.dispose();
-                (last.material as THREE.Material).dispose();
-              }
-              setMeasurementPoints((prev) => prev.slice(0, -1));
-            }} disabled={measurementPoints.length === 0}>
-              Undo
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={isChainMode ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setIsChainMode(v => !v)}>
+                  Chain
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Accumulate segments as a path</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={axisAlign ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setAxisAlign(v => !v)}>
+                  Axis Align
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Lock movement to dominant axis</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={snapToVertex ? "default" : "secondary"} size="sm" className="text-xs" onClick={() => setSnapToVertex(v => !v)}>
+                  Snap Vertex
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Snap to nearest triangle vertex</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" className="text-xs" onClick={() => { undoLastPoint(); }}>
+                  Undo
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Undo (Ctrl+Z)</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" className="text-xs" onClick={() => { redoLastPoint(); }}>
+                  Redo
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Redo (Ctrl+Y or Ctrl+Shift+Z)</TooltipContent>
+            </Tooltip>
           </div>
           <div>Click (no drag) to measure; hold Shift to preview.</div>
           {measurementDisplay !== null ? (
@@ -704,190 +922,18 @@ export function ThreeDViewer({
             </div>
           )}
           <div className="pt-1 flex gap-2">
-            <Button variant="ghost" size="sm" onClick={resetMeasurement} className="text-xs">Reset</Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" onClick={resetMeasurement} className="text-xs">Reset</Button>
+              </TooltipTrigger>
+              <TooltipContent>Clear all measurement points</TooltipContent>
+            </Tooltip>
           </div>
         </div>
       )}
     </div>
-);
+    </TooltipProvider>
+  );
 }
 
-// Add drag detection refs
-const downPosRef = useRef<{ x: number; y: number } | null>(null);
-const isDraggingRef = useRef(false);
-
-// New: record pointer down for click-vs-drag detection
-const handlePointerDown = useCallback((ev: PointerEvent) => {
-  if (ev.button !== 0) return;
-  isDraggingRef.current = false;
-  downPosRef.current = { x: ev.clientX, y: ev.clientY };
-}, []);
-
-// Update: preview move also updates drag detection threshold
-const handleMeasureMove = useCallback((ev: PointerEvent) => {
-  // Mark as dragging if movement exceeds threshold after a pointerdown
-  if (downPosRef.current) {
-    const dx = Math.abs(ev.clientX - downPosRef.current.x);
-    const dy = Math.abs(ev.clientY - downPosRef.current.y);
-    if (dx > 5 || dy > 5) isDraggingRef.current = true;
-  }
-  // Require Shift to show preview and ignore while dragging (buttons!=0)
-  if (measurementPoints.length === 0 || !ev.shiftKey || ev.buttons !== 0) return;
-  const { renderer, camera, modelRoot } = sceneRef.current;
-  if (!renderer || !camera || !modelRoot) return;
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
-  mouseRef.current.set(x, y);
-  raycasterRef.current.setFromCamera(mouseRef.current, camera);
-  const intersects = raycasterRef.current.intersectObject(modelRoot, true);
-  if (intersects.length > 0) {
-    const intersect = intersects[0];
-    const start = measurementPoints[measurementPoints.length - 1];
-    let candidate = intersect.point.clone();
-
-    if (snapToVertex) {
-      const mesh = intersect.object as THREE.Mesh;
-      const geom = mesh.geometry as THREE.BufferGeometry;
-      const index = geom.getIndex();
-      const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
-      const faceIndex = intersect.faceIndex ?? 0;
-      let ai: number, bi: number, ci: number;
-      if (index) {
-        const base = faceIndex * 3;
-        ai = index.getX(base);
-        bi = index.getX(base + 1);
-        ci = index.getX(base + 2);
-      } else {
-        ai = intersect.face?.a ?? 0;
-        bi = intersect.face?.b ?? 1;
-        ci = intersect.face?.c ?? 2;
-      }
-      const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
-      const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
-      const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
-      const dA = candidate.distanceTo(a);
-      const dB = candidate.distanceTo(b);
-      const dC = candidate.distanceTo(c);
-      candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
-    }
-
-    if (axisAlign) {
-      const delta = candidate.clone().sub(start);
-      const ax = Math.abs(delta.x);
-      const ay = Math.abs(delta.y);
-      const az = Math.abs(delta.z);
-      if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
-      else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
-      else candidate.set(start.x, start.y, start.z + delta.z);
-    }
-
-    const { scene, modelRoot: mr } = sceneRef.current;
-    if (!scene || !mr) return;
-    if (previewLineRef.current) {
-      scene.remove(previewLineRef.current);
-      (previewLineRef.current.geometry as THREE.BufferGeometry).dispose();
-      (previewLineRef.current.material as THREE.Material).dispose();
-      previewLineRef.current = null;
-    }
-    // Scale dash size relative to model size so it remains visible across units
-    const bbox = new THREE.Box3().setFromObject(mr);
-    const maxDim = bbox.getSize(new THREE.Vector3());
-    const dash = Math.max(0.005, Math.max(maxDim.x, maxDim.y, maxDim.z) * 0.01);
-    const geom = new THREE.BufferGeometry().setFromPoints([start.clone(), candidate.clone()]);
-    const mat = new THREE.LineDashedMaterial({ color: 0x66ccff, dashSize: dash, gapSize: dash * 0.5 });
-    const line = new THREE.Line(geom, mat);
-    line.computeLineDistances();
-    previewLineRef.current = line;
-    scene.add(line);
-    setMeasurementDistance(start.distanceTo(candidate));
-  }
-}, [measurementPoints, snapToVertex, axisAlign]);
-
-// New: place points on click when not dragging
-const handlePointerUp = useCallback((ev: PointerEvent) => {
-  if (ev.button !== 0) return;
-  const dp = downPosRef.current;
-  const moved = dp ? Math.hypot(ev.clientX - dp.x, ev.clientY - dp.y) > 5 : false;
-  const wasDragging = isDraggingRef.current || moved;
-  downPosRef.current = null;
-  isDraggingRef.current = false;
-  if (wasDragging) return; // treat as rotation/pan; do not place point
-
-  const { renderer, camera, modelRoot } = sceneRef.current;
-  if (!renderer || !camera || !modelRoot) return;
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  const x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-  const y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
-  mouseRef.current.set(x, y);
-  raycasterRef.current.setFromCamera(mouseRef.current, camera);
-
-  const intersects = raycasterRef.current.intersectObject(modelRoot, true);
-  if (intersects.length > 0) {
-    const intersect = intersects[0];
-    const start = measurementPoints.length > 0 ? measurementPoints[measurementPoints.length - 1] : undefined;
-    let candidate = intersect.point.clone();
-
-    if (snapToVertex) {
-      const mesh = intersect.object as THREE.Mesh;
-      const geom = mesh.geometry as THREE.BufferGeometry;
-      const index = geom.getIndex();
-      const posAttr = geom.getAttribute("position") as THREE.BufferAttribute;
-      const faceIndex = intersect.faceIndex ?? 0;
-      let ai: number, bi: number, ci: number;
-      if (index) {
-        const base = faceIndex * 3;
-        ai = index.getX(base);
-        bi = index.getX(base + 1);
-        ci = index.getX(base + 2);
-      } else {
-        ai = intersect.face?.a ?? 0;
-        bi = intersect.face?.b ?? 1;
-        ci = intersect.face?.c ?? 2;
-      }
-      const a = new THREE.Vector3(posAttr.getX(ai), posAttr.getY(ai), posAttr.getZ(ai)).applyMatrix4(mesh.matrixWorld);
-      const b = new THREE.Vector3(posAttr.getX(bi), posAttr.getY(bi), posAttr.getZ(bi)).applyMatrix4(mesh.matrixWorld);
-      const c = new THREE.Vector3(posAttr.getX(ci), posAttr.getY(ci), posAttr.getZ(ci)).applyMatrix4(mesh.matrixWorld);
-      const dA = candidate.distanceTo(a);
-      const dB = candidate.distanceTo(b);
-      const dC = candidate.distanceTo(c);
-      candidate = dA <= dB && dA <= dC ? a : dB <= dC ? b : c;
-    }
-
-    if (axisAlign && start) {
-      const delta = candidate.clone().sub(start);
-      const ax = Math.abs(delta.x);
-      const ay = Math.abs(delta.y);
-      const az = Math.abs(delta.z);
-      if (ax >= ay && ax >= az) candidate.set(start.x + delta.x, start.y, start.z);
-      else if (ay >= ax && ay >= az) candidate.set(start.x, start.y + delta.y, start.z);
-      else candidate.set(start.x, start.y, start.z + delta.z);
-    }
-
-    if (!isChainMode && measurementPoints.length >= 2) {
-      resetMeasurement();
-    }
-    addMeasurementPoint(candidate);
-  }
-}, [addMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
-useEffect(() => {
-  const { renderer, controls } = sceneRef.current;
-  if (!renderer || !controls) return;
-  if (measurementMode) {
-    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
-    renderer.domElement.addEventListener("pointerup", handlePointerUp);
-    renderer.domElement.addEventListener("pointermove", handleMeasureMove);
-    return () => {
-      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
-      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
-      renderer.domElement.removeEventListener("pointermove", handleMeasureMove);
-    };
-  }
-}, [measurementMode, handlePointerDown, handlePointerUp, handleMeasureMove]);
-
-// Update overlay instructions
-// <div>Hold Shift and click to measure; hover with Shift shows preview.</div>
-// becomes:
-// <div>Click (no drag) to measure; hold Shift to preview.</div>
+/* consolidated handlers inside component; removed duplicate block */
