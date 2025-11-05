@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { LOD } from "three/examples/jsm/objects/LOD.js";
+import { SimplifyModifier } from "three/examples/jsm/modifiers/SimplifyModifier.js";
 import { Button } from "@/components/ui/button";
-import { RotateCw, ZoomIn, ZoomOut, Maximize2, Ruler, Upload } from "lucide-react";
+import { RotateCw, ZoomIn, ZoomOut, Maximize2, Ruler, Upload, Download, Camera, ArrowUp, ArrowRight, ArrowLeft } from "lucide-react";
+import { MeasurementGrid } from "./MeasurementGrid";
+import { MeasurementReport } from "./MeasurementReport";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   loadObjectFromFile,
@@ -47,6 +51,12 @@ export function ThreeDViewer({
   const [isChainMode, setIsChainMode] = useState(false);
   const [snapToVertex, setSnapToVertex] = useState(false);
   const [axisAlign, setAxisAlign] = useState(false);
+  const [showAnnotations, setShowAnnotations] = useState(true);
+  const [editingAnnotation, setEditingAnnotation] = useState<number | null>(null);
+  const [annotations, setAnnotations] = useState<string[]>([]);
+  const [gridSize, setGridSize] = useState<number>(20);
+  const [gridDivisions, setGridDivisions] = useState<number>(20);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
   const measurementMarkersRef = useRef<THREE.Mesh[]>([]);
   const measurementLineRef = useRef<THREE.Line | null>(null);
   const previewLineRef = useRef<THREE.Line | null>(null);
@@ -63,6 +73,35 @@ export function ThreeDViewer({
     axes?: THREE.AxesHelper;
     animationId?: number;
   }>({});
+
+  // Update grid helper
+  const updateGrid = useCallback(() => {
+    const { scene } = sceneRef.current;
+    if (!scene) return;
+    
+    // Remove existing grid if any
+    scene.children.forEach(child => {
+      if (child instanceof THREE.GridHelper) {
+        scene.remove(child);
+        if (child.material instanceof THREE.Material) {
+          child.material.dispose();
+        }
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose());
+        }
+      }
+    });
+    
+    // Add new grid if enabled
+    if (showGrid) {
+      const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x444444, 0x222222);
+      scene.add(gridHelper);
+    }
+  }, [showGrid, gridSize, gridDivisions]);
+
+  useEffect(() => {
+    updateGrid();
+  }, [showGrid, gridSize, gridDivisions, updateGrid]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -287,27 +326,112 @@ export function ThreeDViewer({
     redoStackRef.current = [];
   }, []);
 
+  // Helper function to count triangles in a geometry
+  const getTriangleCount = useCallback((geometry: THREE.BufferGeometry) => {
+    const index = geometry.index;
+    if (index) {
+      return index.count / 3;
+    } else {
+      return geometry.attributes.position.count / 3;
+    }
+  }, []);
+
+  // Create simplified version of a model using SimplifyModifier
+  const createSimplifiedModel = useCallback((originalModel: THREE.Object3D, targetRatio: number) => {
+    const simplifiedModel = originalModel.clone();
+    const modifier = new SimplifyModifier();
+    
+    simplifiedModel.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.geometry instanceof THREE.BufferGeometry) {
+        const geometry = object.geometry;
+        
+        // Only simplify if we have enough vertices
+        if (geometry.attributes.position && geometry.attributes.position.count > 100) {
+          try {
+            // Calculate target vertex count
+            const targetCount = Math.max(
+              100, 
+              Math.floor(geometry.attributes.position.count * targetRatio)
+            );
+            
+            // Apply simplification
+            const simplified = modifier.modify(geometry, targetCount);
+            object.geometry = simplified;
+          } catch (e) {
+            console.warn("Failed to simplify geometry:", e);
+          }
+        }
+      }
+    });
+    
+    return simplifiedModel;
+  }, []);
+
+  // Create LOD (Level of Detail) for complex models
+  const createLODModel = useCallback((originalModel: THREE.Object3D) => {
+    const lodObject = new LOD();
+    
+    // Clone the original model for highest detail level
+    const highDetail = originalModel.clone();
+    lodObject.addLevel(highDetail, 0);
+    
+    // Create medium detail level (50% reduction)
+    const mediumDetail = createSimplifiedModel(originalModel, 0.5);
+    if (mediumDetail) lodObject.addLevel(mediumDetail, 10);
+    
+    // Create low detail level (80% reduction)
+    const lowDetail = createSimplifiedModel(originalModel, 0.2);
+    if (lowDetail) lodObject.addLevel(lowDetail, 50);
+    
+    return lodObject;
+  }, [createSimplifiedModel]);
+
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
     try {
       const object = await loadObjectFromFile(file);
 
+      // Check if model is complex enough to need LOD
+      let modelRoot: THREE.Object3D;
+      let triangleCount = 0;
+      
+      object.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry) {
+          triangleCount += getTriangleCount(child.geometry);
+        }
+      });
+      
+      // Apply LOD for models with more than 100,000 triangles
+      if (triangleCount > 100000) {
+        modelRoot = createLODModel(object);
+        console.log(`Applied LOD to model with ${triangleCount} triangles`);
+      } else {
+        modelRoot = object;
+      }
+
       // Normalize transforms
-      scaleObjectToUnit(object, unit, file.name);
-      centerObject(object);
+      scaleObjectToUnit(modelRoot, unit, file.name);
+      centerObject(modelRoot);
 
       // Add to scene
       const { scene, camera, controls, axes } = sceneRef.current;
       if (!scene || !camera) return;
 
       clearCurrentModel();
-      scene.add(object);
-      sceneRef.current.modelRoot = object;
+      scene.add(modelRoot);
+      sceneRef.current.modelRoot = modelRoot;
       setHasModel(true);
 
+      // Enable frustum culling for better performance
+      modelRoot.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.frustumCulled = true;
+        }
+      });
+
       // Frame the model
-      const box = new THREE.Box3().setFromObject(object);
+      const box = new THREE.Box3().setFromObject(modelRoot);
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
@@ -330,7 +454,7 @@ export function ThreeDViewer({
     } catch (e) {
       console.error("Failed to load model:", e);
     }
-  }, [unit, clearCurrentModel, onModelMetrics]);
+  }, [unit, clearCurrentModel, onModelMetrics, createLODModel, getTriangleCount]);
 
   // Measurement helpers
   const addMeasurementPoint = useCallback((point: THREE.Vector3) => {
@@ -359,6 +483,14 @@ export function ThreeDViewer({
 
     // Clear redo stack on new actions
     redoStackRef.current = [];
+    
+    // Add default annotation for the new point
+    setAnnotations(prev => {
+      const pointIndex = isChainMode ? prev.length : 0;
+      const newAnnotations = isChainMode ? [...prev] : [];
+      newAnnotations[pointIndex] = `Point ${pointIndex + 1}`;
+      return newAnnotations;
+    });
 
     setMeasurementPoints((prev) => {
       let next = prev;
@@ -448,6 +580,8 @@ export function ThreeDViewer({
     setMeasurementPoints([]);
     setMeasurementDistance(null);
     setCumulativeDistance(null);
+    setAnnotations([]);
+    setEditingAnnotation(null);
   }, []);
 
   const undoLastPoint = useCallback(() => {
@@ -507,6 +641,97 @@ export function ThreeDViewer({
     if (!pt) return;
     addMeasurementPoint(pt);
   }, [addMeasurementPoint]);
+  
+  // Export measurement data as CSV or JSON
+  const exportMeasurementData = useCallback((format: 'csv' | 'json') => {
+    if (measurementPoints.length === 0) return;
+    
+    const metersPerUnit = unit === "meters" ? 1 : unit === "centimeters" ? 0.01 : 0.001;
+    const unitLabel = unit === "meters" ? "m" : unit === "centimeters" ? "cm" : "mm";
+    
+    let content: string;
+    let filename: string;
+    let mimeType: string;
+    
+    if (format === 'csv') {
+      // Create CSV content
+      const headers = ['Point', 'X', 'Y', 'Z', `Distance (${unitLabel})`];
+      const rows = measurementPoints.map((point, index) => {
+        const distance = index > 0 
+          ? (measurementPoints[index-1].distanceTo(point) / metersPerUnit).toFixed(4)
+          : '';
+        return [
+          index + 1,
+          (point.x / metersPerUnit).toFixed(4),
+          (point.y / metersPerUnit).toFixed(4),
+          (point.z / metersPerUnit).toFixed(4),
+          distance
+        ].join(',');
+      });
+      
+      content = [headers.join(','), ...rows].join('\n');
+      filename = `measurements_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
+      mimeType = 'text/csv';
+    } else {
+      // Create JSON content
+      const points = measurementPoints.map((point, index) => {
+        const distance = index > 0 
+          ? measurementPoints[index-1].distanceTo(point) / metersPerUnit
+          : null;
+        return {
+          index: index + 1,
+          position: {
+            x: point.x / metersPerUnit,
+            y: point.y / metersPerUnit,
+            z: point.z / metersPerUnit
+          },
+          distance
+        };
+      });
+      
+      const data = {
+        unit: unitLabel,
+        points,
+        totalDistance: cumulativeDistance !== null ? cumulativeDistance / metersPerUnit : null,
+        timestamp: new Date().toISOString()
+      };
+      
+      content = JSON.stringify(data, null, 2);
+      filename = `measurements_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+      mimeType = 'application/json';
+    }
+    
+    // Create and trigger download
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [measurementPoints, unit, cumulativeDistance]);
+  
+  // Capture screenshot of the current view
+  const captureScreenshot = useCallback(() => {
+    const { renderer, scene, camera } = sceneRef.current;
+    if (!renderer || !scene || !camera) return;
+    
+    // Render the scene
+    renderer.render(scene, camera);
+    
+    // Get the canvas data as a data URL
+    const dataURL = renderer.domElement.toDataURL('image/png');
+    
+    // Create and trigger download
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = `3d-view-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, []);
 
   const handleMeasureMove = useCallback((ev: PointerEvent) => {
     // Mark as dragging if movement exceeds threshold after a pointerdown
@@ -592,6 +817,58 @@ export function ThreeDViewer({
   // Drag detection refs and handlers
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef = useRef(false);
+
+  // View preset functions
+  const setTopView = useCallback(() => {
+    const { camera, controls, modelRoot } = sceneRef.current;
+    if (!camera || !controls || !modelRoot) return;
+    
+    const box = new THREE.Box3().setFromObject(modelRoot);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
+    const fitWidthDistance = fitHeightDistance / camera.aspect;
+    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
+    
+    camera.position.set(center.x, center.y + distance, center.z);
+    controls.target.copy(center);
+    controls.update();
+  }, []);
+  
+  const setFrontView = useCallback(() => {
+    const { camera, controls, modelRoot } = sceneRef.current;
+    if (!camera || !controls || !modelRoot) return;
+    
+    const box = new THREE.Box3().setFromObject(modelRoot);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
+    const fitWidthDistance = fitHeightDistance / camera.aspect;
+    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
+    
+    camera.position.set(center.x, center.y, center.z + distance);
+    controls.target.copy(center);
+    controls.update();
+  }, []);
+  
+  const setSideView = useCallback(() => {
+    const { camera, controls, modelRoot } = sceneRef.current;
+    if (!camera || !controls || !modelRoot) return;
+    
+    const box = new THREE.Box3().setFromObject(modelRoot);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
+    const fitWidthDistance = fitHeightDistance / camera.aspect;
+    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
+    
+    camera.position.set(center.x + distance, center.y, center.z);
+    controls.target.copy(center);
+    controls.update();
+  }, []);
 
   const handlePointerDown = useCallback((ev: PointerEvent) => {
     if (ev.button !== 0) return;
@@ -737,6 +1014,69 @@ export function ThreeDViewer({
       )}
       
       <div className="absolute top-4 right-4 flex flex-col gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="secondary"
+              size="icon"
+              onClick={captureScreenshot}
+              data-testid="button-screenshot"
+            >
+              <Camera className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Capture screenshot</TooltipContent>
+        </Tooltip>
+        
+        {/* View preset buttons */}
+        <div className="bg-secondary/80 rounded-md p-1 flex flex-col gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={setTopView}
+                disabled={!hasModel}
+                className="h-8 w-8"
+                data-testid="button-top-view"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Top view</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={setFrontView}
+                disabled={!hasModel}
+                className="h-8 w-8"
+                data-testid="button-front-view"
+              >
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Front view</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={setSideView}
+                disabled={!hasModel}
+                className="h-8 w-8"
+                data-testid="button-side-view"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Side view</TooltipContent>
+          </Tooltip>
+        </div>
+        
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -921,14 +1261,104 @@ export function ThreeDViewer({
               Total: <span className="font-bold">{cumulativeDisplay.toFixed(3)} {unitLabel}</span>
             </div>
           )}
-          <div className="pt-1 flex gap-2">
+          <div className="pt-1 flex gap-2 flex-wrap">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="sm" onClick={resetMeasurement} className="text-xs">Reset</Button>
               </TooltipTrigger>
               <TooltipContent>Clear all measurement points</TooltipContent>
             </Tooltip>
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => exportMeasurementData('csv')} 
+                  disabled={measurementPoints.length === 0}
+                  className="text-xs"
+                >
+                  <Download className="h-3 w-3 mr-1" />
+                  CSV
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export measurements as CSV</TooltipContent>
+            </Tooltip>
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => exportMeasurementData('json')} 
+                  disabled={measurementPoints.length === 0}
+                  className="text-xs"
+                >
+                  <Download className="h-3 w-3 mr-1" />
+                  JSON
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Export measurements as JSON</TooltipContent>
+            </Tooltip>
+            
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setShowAnnotations(!showAnnotations)} 
+                  className="text-xs"
+                >
+                  {showAnnotations ? "Hide Labels" : "Show Labels"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Toggle point annotations</TooltipContent>
+            </Tooltip>
+            
+            <MeasurementReport 
+              measurementPoints={measurementPoints}
+              annotations={annotations}
+              unit={unit}
+              cumulativeDistance={cumulativeDistance}
+            />
           </div>
+          
+          {showAnnotations && measurementPoints.length > 0 && (
+            <div className="mt-2 border-t border-gray-700 pt-2">
+              <div className="text-xs font-medium mb-1">Point Annotations</div>
+              <div className="max-h-32 overflow-y-auto">
+                {measurementPoints.map((_, index) => (
+                  <div key={index} className="flex items-center gap-2 mb-1">
+                    <div className="text-xs w-14">Point {index + 1}:</div>
+                    {editingAnnotation === index ? (
+                      <input
+                        type="text"
+                        className="flex-1 text-xs bg-gray-800 border border-gray-600 rounded px-2 py-1"
+                        value={annotations[index] || ''}
+                        onChange={(e) => {
+                          const newAnnotations = [...annotations];
+                          newAnnotations[index] = e.target.value;
+                          setAnnotations(newAnnotations);
+                        }}
+                        onBlur={() => setEditingAnnotation(null)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') setEditingAnnotation(null);
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <div 
+                        className="flex-1 text-xs px-2 py-1 cursor-pointer hover:bg-gray-800 rounded"
+                        onClick={() => setEditingAnnotation(index)}
+                      >
+                        {annotations[index] || `Point ${index + 1}`}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
