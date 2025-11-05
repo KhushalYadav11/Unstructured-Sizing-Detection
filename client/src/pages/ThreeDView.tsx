@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { ThreeDViewer } from "@/components/ThreeDViewer";
+import { ModelComparison } from "@/components/ModelComparison";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Box, Info } from "lucide-react";
+import { ArrowLeft, Box, Info, SplitHorizontal } from "lucide-react";
 import { useLocation } from "wouter";
 import type { ModelMetrics } from "@/lib/three-utils";
 import {
@@ -11,6 +12,7 @@ import {
   AlertTitle,
 } from "@/components/ui/alert";
 import type { Unit } from "@/lib/three-utils";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   Select,
   SelectTrigger,
@@ -24,6 +26,7 @@ export default function ThreeDView() {
   const [measurementMode, setMeasurementMode] = useState(false);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics | null>(null);
   const [displayUnit, setDisplayUnit] = useState<Unit>("meters");
+  const [showComparison, setShowComparison] = useState(false);
 
   const metersPerUnit = displayUnit === "meters" ? 1 : displayUnit === "centimeters" ? 0.01 : 0.001;
   const unitLabel = displayUnit === "meters" ? "m" : displayUnit === "centimeters" ? "cm" : "mm";
@@ -64,6 +67,17 @@ export default function ThreeDView() {
             </p>
           </div>
         </div>
+        <div className="flex items-center gap-4">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowComparison(!showComparison)}
+            className="flex items-center gap-2"
+          >
+            <SplitHorizontal className="h-4 w-4" />
+            <span>{showComparison ? "Single View" : "Compare Models"}</span>
+          </Button>
+          <ThemeToggle />
       </div>
 
       {/* Info Alert */}
@@ -87,11 +101,15 @@ export default function ThreeDView() {
         </CardHeader>
         <CardContent className="flex-1 min-h-0 p-0">
           <div className="h-full min-h-[600px]">
-            <ThreeDViewer
-              measurementMode={measurementMode}
-              onMeasurementToggle={() => setMeasurementMode(!measurementMode)}
-              onModelMetrics={setModelMetrics}
-            />
+            {showComparison ? (
+              <ModelComparison />
+            ) : (
+              <ThreeDViewer
+                measurementMode={measurementMode}
+                onMeasurementToggle={() => setMeasurementMode(!measurementMode)}
+                onModelMetrics={setModelMetrics}
+              />
+            )}
           </div>
         </CardContent>
       </Card>
