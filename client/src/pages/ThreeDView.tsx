@@ -3,7 +3,7 @@ import { ThreeDViewer } from "@/components/ThreeDViewer";
 import { ModelComparison } from "@/components/ModelComparison";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Box, Info, SplitHorizontal } from "lucide-react";
+import { ArrowLeft, Box, Info, SquareSplitHorizontal } from "lucide-react";
 import { useLocation } from "wouter";
 import type { ModelMetrics } from "@/lib/three-utils";
 import {
@@ -74,10 +74,11 @@ export default function ThreeDView() {
             onClick={() => setShowComparison(!showComparison)}
             className="flex items-center gap-2"
           >
-            <SplitHorizontal className="h-4 w-4" />
+            <SquareSplitHorizontal className="h-4 w-4" />
             <span>{showComparison ? "Single View" : "Compare Models"}</span>
           </Button>
           <ThemeToggle />
+        </div>
       </div>
 
       {/* Info Alert */}
