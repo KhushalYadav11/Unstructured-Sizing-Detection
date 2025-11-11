@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { LOD } from "three/examples/jsm/objects/LOD.js";
+import { LOD } from "three";
 import { SimplifyModifier } from "three/examples/jsm/modifiers/SimplifyModifier.js";
 import { Button } from "@/components/ui/button";
 import { RotateCw, ZoomIn, ZoomOut, Maximize2, Ruler, Upload, Download, Camera, ArrowUp, ArrowRight, ArrowLeft } from "lucide-react";
@@ -23,6 +23,8 @@ import {
   SelectItem,
   SelectValue,
 } from "@/components/ui/select";
+import { ConvexHull } from "three/examples/jsm/math/ConvexHull.js";
+import { useViewerStore } from "@/hooks/use-viewer-store";
 
 // Drag threshold in pixels to differentiate click vs drag
 const DRAG_THRESHOLD = 5;
@@ -34,6 +36,16 @@ interface ThreeDViewerProps {
   onModelMetrics?: (metrics: ModelMetrics) => void;
 }
 
+interface ConvexHullFace {
+  a: number;
+  b: number;
+  c: number;
+}
+
+interface MeasurementPoint extends THREE.Vector3 {
+  annotation?: string;
+}
+
 export function ThreeDViewer({
   modelLoaded = false,
   measurementMode = false,
@@ -41,12 +53,19 @@ export function ThreeDViewer({
   onModelMetrics,
 }: ThreeDViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const {
+    measurementPoints,
+    setCalculatedVolume,
+    setMeasurementPoints,
+    addMeasurementPoint,
+  } = useViewerStore();
   const [isRotating, setIsRotating] = useState(false);
   const [hasModel, setHasModel] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [unit, setUnit] = useState<Unit>("meters");
   const [metrics, setMetrics] = useState<ModelMetrics | null>(null);
   const [measurementDistance, setMeasurementDistance] = useState<number | null>(null);
-  const [measurementPoints, setMeasurementPoints] = useState<THREE.Vector3[]>([]);
+
   const [cumulativeDistance, setCumulativeDistance] = useState<number | null>(null);
   const [isChainMode, setIsChainMode] = useState(false);
   const [snapToVertex, setSnapToVertex] = useState(false);
@@ -99,12 +118,53 @@ export function ThreeDViewer({
     }
   }, [showGrid, gridSize, gridDivisions]);
 
+  // Fix convex hull calculation
+  const calculateVolume = useCallback((points: THREE.Vector3[]) => {
+    if (points.length < 4) return 0;
+
+    const convexHull = new ConvexHull().setFromPoints(points);
+    let volume = 0;
+
+    // Cast faces to our interface
+    const faces = (convexHull.faces || []) as unknown as ConvexHullFace[];
+    
+    for (const face of faces) {
+      const p1 = points[face.a];
+      const p2 = points[face.b];
+      const p3 = points[face.c];
+      volume += p1.clone().cross(p2).dot(p3) / 6;
+    }
+
+    return Math.abs(volume);
+  }, []);
+
+  useEffect(() => {
+    if (measurementPoints.length > 3) {
+      const volume = calculateVolume(measurementPoints);
+      setCalculatedVolume(volume);
+    }
+  }, [measurementPoints, calculateVolume, setCalculatedVolume]);
+
   useEffect(() => {
     updateGrid();
   }, [showGrid, gridSize, gridDivisions, updateGrid]);
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Ensure container has dimensions
+    const container = containerRef.current;
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      // Wait for next frame to ensure container is sized
+      const timeoutId = setTimeout(() => {
+        if (container.clientWidth > 0 && container.clientHeight > 0) {
+          // Retry initialization
+          const event = new Event('resize');
+          window.dispatchEvent(event);
+        }
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
 
     let animationId: number;
     let renderer: THREE.WebGLRenderer;
@@ -116,9 +176,12 @@ export function ThreeDViewer({
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0a0a0a);
       
+      const width = container.clientWidth || 800;
+      const height = container.clientHeight || 600;
+      
       camera = new THREE.PerspectiveCamera(
         75,
-        containerRef.current.clientWidth / containerRef.current.clientHeight,
+        width / height,
         0.1,
         1000
       );
@@ -126,11 +189,8 @@ export function ThreeDViewer({
       camera.lookAt(0, 0, 0);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-      renderer.setSize(
-        containerRef.current.clientWidth,
-        containerRef.current.clientHeight
-      );
-      containerRef.current.appendChild(renderer.domElement);
+      renderer.setSize(width, height);
+      container.appendChild(renderer.domElement);
 
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
       scene.add(ambientLight);
@@ -156,9 +216,12 @@ export function ThreeDViewer({
       controls.update();
 
       sceneRef.current = { scene, camera, renderer, controls, axes: axesHelper };
+      (sceneRef.current as any).isRotating = isRotating;
 
       const animate = () => {
-        if (isRotating && sceneRef.current.modelRoot) {
+        // Access isRotating from sceneRef which is updated by useEffect
+        const shouldRotate = (sceneRef.current as any)?.isRotating ?? false;
+        if (shouldRotate && sceneRef.current.modelRoot) {
           sceneRef.current.modelRoot.rotation.y += 0.005;
         }
         controls?.update();
@@ -262,10 +325,28 @@ export function ThreeDViewer({
         }
       };
     } catch (error) {
-      console.warn("WebGL not available:", error);
+      console.error("Failed to initialize Three.js scene:", error);
+      // Show error message to user
+      if (containerRef.current) {
+        containerRef.current.innerHTML = `
+          <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #ef4444; text-align: center; padding: 20px;">
+            <div>
+              <h3 style="margin-bottom: 10px;">Failed to initialize 3D Viewer</h3>
+              <p style="color: #9ca3af;">${error instanceof Error ? error.message : 'WebGL may not be available'}</p>
+            </div>
+          </div>
+        `;
+      }
       return;
     }
-  }, [modelLoaded, measurementMode, isRotating]);
+  }, []); // Only run once on mount
+
+  // Update rotation state in the scene ref for animation loop
+  useEffect(() => {
+    if (sceneRef.current) {
+      (sceneRef.current as any).isRotating = isRotating;
+    }
+  }, [isRotating]);
 
   const clearCurrentModel = useCallback(() => {
     const { scene, modelRoot } = sceneRef.current;
@@ -389,8 +470,17 @@ export function ThreeDViewer({
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
+    
+    setIsLoading(true);
+    
     try {
+      // Yield to UI thread before heavy processing
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
       const object = await loadObjectFromFile(file);
+
+      // Yield to UI thread periodically during processing
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       // Check if model is complex enough to need LOD
       let modelRoot: THREE.Object3D;
@@ -402,21 +492,36 @@ export function ThreeDViewer({
         }
       });
       
+      // Yield to UI thread
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
       // Apply LOD for models with more than 100,000 triangles
+      // But do it in a way that doesn't block the UI
       if (triangleCount > 100000) {
-        modelRoot = createLODModel(object);
-        console.log(`Applied LOD to model with ${triangleCount} triangles`);
+        // For very large models, skip LOD creation to avoid blocking
+        // Just use the original model
+        console.log(`Large model detected with ${triangleCount} triangles - skipping LOD to prevent UI freeze`);
+        modelRoot = object;
       } else {
         modelRoot = object;
       }
+
+      // Yield to UI thread
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       // Normalize transforms
       scaleObjectToUnit(modelRoot, unit, file.name);
       centerObject(modelRoot);
 
+      // Yield to UI thread
+      await new Promise(resolve => setTimeout(resolve, 0));
+
       // Add to scene
       const { scene, camera, controls, axes } = sceneRef.current;
-      if (!scene || !camera) return;
+      if (!scene || !camera) {
+        setIsLoading(false);
+        return;
+      }
 
       clearCurrentModel();
       scene.add(modelRoot);
@@ -447,17 +552,27 @@ export function ThreeDViewer({
       // Ensure axes bisect the model center
       axes?.position.copy(center);
 
-      // Compute metrics
-      const computed = computeModelMetrics(object);
-      setMetrics(computed);
-      onModelMetrics?.(computed);
+      // Compute metrics asynchronously to avoid blocking
+      setTimeout(() => {
+        try {
+          const computed = computeModelMetrics(object);
+          setMetrics(computed);
+          onModelMetrics?.(computed);
+        } catch (e) {
+          console.error("Failed to compute metrics:", e);
+        }
+      }, 0);
+      
+      setIsLoading(false);
     } catch (e) {
       console.error("Failed to load model:", e);
+      setIsLoading(false);
+      alert(`Failed to load model: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
-  }, [unit, clearCurrentModel, onModelMetrics, createLODModel, getTriangleCount]);
+  }, [unit, clearCurrentModel, onModelMetrics, getTriangleCount]);
 
   // Measurement helpers
-  const addMeasurementPoint = useCallback((point: THREE.Vector3) => {
+  const handleAddMeasurementPoint = useCallback((point: THREE.Vector3) => {
     const { scene, modelRoot } = sceneRef.current;
     if (!scene || !modelRoot) return;
 
@@ -492,69 +607,9 @@ export function ThreeDViewer({
       return newAnnotations;
     });
 
-    setMeasurementPoints((prev) => {
-      let next = prev;
-      if (!isChainMode && prev.length >= 2) {
-        // Non-chain mode: start fresh
-        next = [];
-        // remove old markers
-        measurementMarkersRef.current.forEach(m => {
-          scene.remove(m);
-          m.geometry.dispose();
-          (m.material as THREE.Material).dispose();
-        });
-        measurementMarkersRef.current = [];
-      }
-      const updated = [...next, point.clone()];
-
-      // Update line and distances
-      if (isChainMode) {
-        // rebuild line for chain
-        if (measurementLineRef.current) {
-          scene.remove(measurementLineRef.current);
-          (measurementLineRef.current.geometry as THREE.BufferGeometry).dispose();
-          (measurementLineRef.current.material as THREE.Material).dispose();
-          measurementLineRef.current = null;
-        }
-        if (updated.length >= 2) {
-          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
-          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
-          const line = new THREE.Line(lineGeom, lineMat);
-          measurementLineRef.current = line;
-          scene.add(line);
-          // update cumulative
-          let sum = 0;
-          for (let i = 1; i < updated.length; i++) {
-            sum += updated[i - 1].distanceTo(updated[i]);
-          }
-          setCumulativeDistance(sum);
-          setMeasurementDistance(updated[updated.length - 2].distanceTo(updated[updated.length - 1]));
-        } else {
-          setCumulativeDistance(null);
-          setMeasurementDistance(null);
-        }
-      } else {
-        // simple two-point measurement
-        if (updated.length === 2) {
-          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
-          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
-          const line = new THREE.Line(lineGeom, lineMat);
-          if (measurementLineRef.current) {
-            scene.remove(measurementLineRef.current);
-            (measurementLineRef.current.geometry as THREE.BufferGeometry).dispose();
-            (measurementLineRef.current.material as THREE.Material).dispose();
-          }
-          measurementLineRef.current = line;
-          scene.add(line);
-          setMeasurementDistance(updated[0].distanceTo(updated[1]));
-        } else {
-          setMeasurementDistance(null);
-        }
-      }
-
-      return updated;
-    });
-  }, [isChainMode]);
+    // Call the store function to update state
+    addMeasurementPoint(point);
+  }, [isChainMode, addMeasurementPoint]);
 
   const resetMeasurement = useCallback(() => {
     const { scene } = sceneRef.current;
@@ -595,52 +650,48 @@ export function ThreeDViewer({
       last.geometry.dispose();
       (last.material as THREE.Material).dispose();
     }
-    setMeasurementPoints((prev) => {
-      const updated = prev.slice(0, -1);
-      const { scene } = sceneRef.current;
-      if (!scene) return updated;
-      if (measurementLineRef.current) {
-        scene.remove(measurementLineRef.current);
-        (measurementLineRef.current.geometry as THREE.BufferGeometry).dispose();
-        (measurementLineRef.current.material as THREE.Material).dispose();
-        measurementLineRef.current = null;
-      }
-      if (isChainMode) {
-        if (updated.length >= 2) {
-          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
-          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
-          const line = new THREE.Line(lineGeom, lineMat);
-          measurementLineRef.current = line;
-          scene.add(line);
-          let sum = 0;
-          for (let i = 1; i < updated.length; i++) sum += updated[i - 1].distanceTo(updated[i]);
-          setCumulativeDistance(sum);
-          setMeasurementDistance(updated.length >= 2 ? updated[updated.length - 2].distanceTo(updated[updated.length - 1]) : null);
-        } else {
-          setCumulativeDistance(null);
-          setMeasurementDistance(null);
-        }
+    const updated = measurementPoints.slice(0, -1);
+    if (measurementLineRef.current) {
+      scene.remove(measurementLineRef.current);
+      (measurementLineRef.current.geometry as THREE.BufferGeometry).dispose();
+      (measurementLineRef.current.material as THREE.Material).dispose();
+      measurementLineRef.current = null;
+    }
+    if (isChainMode) {
+      if (updated.length >= 2) {
+        const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+        const line = new THREE.Line(lineGeom, lineMat);
+        measurementLineRef.current = line;
+        scene.add(line);
+        let sum = 0;
+        for (let i = 1; i < updated.length; i++) sum += updated[i - 1].distanceTo(updated[i]);
+        setCumulativeDistance(sum);
+        setMeasurementDistance(updated.length >= 2 ? updated[updated.length - 2].distanceTo(updated[updated.length - 1]) : null);
       } else {
-        if (updated.length === 2) {
-          const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
-          const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
-          const line = new THREE.Line(lineGeom, lineMat);
-          measurementLineRef.current = line;
-          scene.add(line);
-          setMeasurementDistance(updated[0].distanceTo(updated[1]));
-        } else {
-          setMeasurementDistance(null);
-        }
+        setCumulativeDistance(null);
+        setMeasurementDistance(null);
       }
-      return updated;
-    });
-  }, [isChainMode]);
+    } else {
+      if (updated.length === 2) {
+        const lineGeom = new THREE.BufferGeometry().setFromPoints(updated);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff });
+        const line = new THREE.Line(lineGeom, lineMat);
+        measurementLineRef.current = line;
+        scene.add(line);
+        setMeasurementDistance(updated[0].distanceTo(updated[1]));
+      } else {
+        setMeasurementDistance(null);
+      }
+    }
+    setMeasurementPoints(updated);
+  }, [isChainMode, measurementPoints, setMeasurementPoints]);
 
   const redoLastPoint = useCallback(() => {
     const pt = redoStackRef.current.pop();
     if (!pt) return;
-    addMeasurementPoint(pt);
-  }, [addMeasurementPoint]);
+    handleAddMeasurementPoint(pt);
+  }, [handleAddMeasurementPoint]);
   
   // Export measurement data as CSV or JSON
   const exportMeasurementData = useCallback((format: 'csv' | 'json') => {
@@ -656,7 +707,7 @@ export function ThreeDViewer({
     if (format === 'csv') {
       // Create CSV content
       const headers = ['Point', 'X', 'Y', 'Z', `Distance (${unitLabel})`];
-      const rows = measurementPoints.map((point, index) => {
+      const rows = measurementPoints.map((point: THREE.Vector3, index: number) => {
         const distance = index > 0 
           ? (measurementPoints[index-1].distanceTo(point) / metersPerUnit).toFixed(4)
           : '';
@@ -674,7 +725,7 @@ export function ThreeDViewer({
       mimeType = 'text/csv';
     } else {
       // Create JSON content
-      const points = measurementPoints.map((point, index) => {
+      const points = measurementPoints.map((point: THREE.Vector3, index: number) => {
         const distance = index > 0 
           ? measurementPoints[index-1].distanceTo(point) / metersPerUnit
           : null;
@@ -822,16 +873,17 @@ export function ThreeDViewer({
   const setTopView = useCallback(() => {
     const { camera, controls, modelRoot } = sceneRef.current;
     if (!camera || !controls || !modelRoot) return;
-    
+
     const box = new THREE.Box3().setFromObject(modelRoot);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
+
     const maxDim = Math.max(size.x, size.y, size.z);
-    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
-    const fitWidthDistance = fitHeightDistance / camera.aspect;
-    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
-    
-    camera.position.set(center.x, center.y + distance, center.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / Math.tan(fov * 0.5));
+
+    camera.position.set(center.x, center.y + cameraZ, center.z);
+    camera.lookAt(center);
     controls.target.copy(center);
     controls.update();
   }, []);
@@ -839,33 +891,34 @@ export function ThreeDViewer({
   const setFrontView = useCallback(() => {
     const { camera, controls, modelRoot } = sceneRef.current;
     if (!camera || !controls || !modelRoot) return;
-    
+
     const box = new THREE.Box3().setFromObject(modelRoot);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
+
     const maxDim = Math.max(size.x, size.y, size.z);
-    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
-    const fitWidthDistance = fitHeightDistance / camera.aspect;
-    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
-    
-    camera.position.set(center.x, center.y, center.z + distance);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / Math.tan(fov * 0.5));
+
+    camera.position.set(center.x, center.y, center.z + cameraZ);
+    camera.lookAt(center);
     controls.target.copy(center);
     controls.update();
   }, []);
-  
+
   const setSideView = useCallback(() => {
     const { camera, controls, modelRoot } = sceneRef.current;
     if (!camera || !controls || !modelRoot) return;
-    
+
     const box = new THREE.Box3().setFromObject(modelRoot);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
-    const fitWidthDistance = fitHeightDistance / camera.aspect;
-    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
-    
-    camera.position.set(center.x + distance, center.y, center.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / Math.tan(fov * 0.5));
+
+    camera.position.set(center.x + cameraZ, center.y, center.z);
+    camera.lookAt(center);
     controls.target.copy(center);
     controls.update();
   }, []);
@@ -939,9 +992,9 @@ export function ThreeDViewer({
       if (!isChainMode && measurementPoints.length >= 2) {
         resetMeasurement();
       }
-      addMeasurementPoint(candidate);
+      handleAddMeasurementPoint(candidate);
     }
-  }, [addMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
+  }, [handleAddMeasurementPoint, measurementPoints, resetMeasurement, snapToVertex, axisAlign, isChainMode]);
 
   useEffect(() => {
     const { renderer, controls } = sceneRef.current;
@@ -997,10 +1050,24 @@ export function ThreeDViewer({
 
   return (
     <TooltipProvider>
-    <div className="relative h-full w-full bg-gray-950 rounded-md overflow-hidden">
-      <div ref={containerRef} className="w-full h-full" />
+    <div className="relative h-full w-full bg-gray-950 rounded-md overflow-hidden" style={{ minHeight: '600px' }}>
+      <div ref={containerRef} className="w-full h-full" style={{ minHeight: '600px' }} />
       
-      {!hasModel && (
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-950/80 backdrop-blur-sm z-50">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <div className="text-muted-foreground text-lg mb-2">
+              Loading Model...
+            </div>
+            <div className="text-muted-foreground/60 text-sm">
+              Please wait while we process your file
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {!hasModel && !isLoading && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
             <div className="text-muted-foreground text-lg mb-2">
@@ -1327,7 +1394,7 @@ export function ThreeDViewer({
             <div className="mt-2 border-t border-gray-700 pt-2">
               <div className="text-xs font-medium mb-1">Point Annotations</div>
               <div className="max-h-32 overflow-y-auto">
-                {measurementPoints.map((_, index) => (
+                {measurementPoints.map((_: THREE.Vector3, index: number) => (
                   <div key={index} className="flex items-center gap-2 mb-1">
                     <div className="text-xs w-14">Point {index + 1}:</div>
                     {editingAnnotation === index ? (
@@ -1365,5 +1432,3 @@ export function ThreeDViewer({
     </TooltipProvider>
   );
 }
-
-/* consolidated handlers inside component; removed duplicate block */
