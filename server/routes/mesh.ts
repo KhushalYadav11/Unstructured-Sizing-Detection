@@ -37,7 +37,7 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
 const upload = multer({ 
   storage, 
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit
 });
 
 // Coal density presets (g/cm³)
