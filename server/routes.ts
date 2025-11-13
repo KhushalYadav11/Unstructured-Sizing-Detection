@@ -908,6 +908,144 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // 3D Reconstruction from images
+  app.post("/api/reconstruct", photoUpload.array("images", 50), async (req, res) => {
+    try {
+      const files = req.files as Express.Multer.File[];
+      const { projectId } = req.body;
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ message: "No images uploaded" });
+      }
+
+      if (!projectId) {
+        for (const file of files) cleanupFile(file.path);
+        return res.status(400).json({ message: "Project ID is required" });
+      }
+
+      // Validate project exists
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        for (const file of files) cleanupFile(file.path);
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Validate file count
+      if (files.length < 2) {
+        for (const file of files) cleanupFile(file.path);
+        return res.status(422).json({
+          message: "Validation failed",
+          details: [{ field: "images", code: "too_few", message: "At least 2 images required for reconstruction" }]
+        });
+      }
+
+      if (files.length > 50) {
+        for (const file of files) cleanupFile(file.path);
+        return res.status(422).json({
+          message: "Validation failed",
+          details: [{ field: "images", code: "too_many", message: "Maximum 50 images allowed" }]
+        });
+      }
+
+      // Validate image files
+      for (const file of files) {
+        if (!["image/jpeg", "image/png", "image/tiff"].includes(file.mimetype)) {
+          for (const f of files) cleanupFile(f.path);
+          return res.status(415).json({ message: "Unsupported media type. Only JPEG, PNG, and TIFF images are supported." });
+        }
+      }
+
+      // Process images and create photogrammetry job
+      const photoRecords: InsertProjectPhoto[] = [];
+      for (const file of files) {
+        // Extract EXIF data
+        let exif: PhotoExif | null = null;
+        try {
+          const buffer = fs.readFileSync(file.path);
+          const parser = ExifParserFactory.create(buffer);
+          const result = parser.parse();
+
+          exif = {
+            focalLength: result.tags?.FocalLength,
+            iso: result.tags?.ISO,
+            exposureTime: result.tags?.ExposureTime,
+            aperture: result.tags?.FNumber,
+            captureTimestamp: result.tags?.DateTimeOriginal ? new Date(result.tags.DateTimeOriginal * 1000) : undefined,
+          };
+
+          if (result.tags?.GPSLatitude && result.tags?.GPSLongitude) {
+            exif.gps = {
+              lat: result.tags.GPSLatitude,
+              lng: result.tags.GPSLongitude,
+              alt: result.tags.GPSAltitude,
+            };
+          }
+        } catch (err) {
+          console.warn("Failed to extract EXIF:", err);
+        }
+
+        // Compute content hash
+        const buffer = fs.readFileSync(file.path);
+        const contentHash = `sha256:${MemStorage.hashBuffer(buffer)}`;
+
+        // Generate storage key
+        const storageKey = MemStorage.buildStorageKey({
+          projectId,
+          type: "photo",
+          filename: file.filename,
+          extension: path.extname(file.originalname).slice(1),
+        });
+
+        photoRecords.push({
+          originalFilename: file.originalname,
+          contentHash,
+          mimeType: file.mimetype,
+          storageKey,
+          exif,
+        });
+      }
+
+      // Add photos to storage
+      const photos = await storage.addProjectPhotos(projectId, photoRecords);
+
+      // Create photogrammetry job
+      const job = await storage.createPhotogrammetryJob({
+        projectId,
+        status: "queued",
+      });
+
+      // Update project reconstruction status
+      await storage.updateProjectReconstruction(projectId, {
+        status: "queued",
+        latestJobId: job.id,
+      });
+
+      // Broadcast reconstruction status change
+      eventBroadcaster.broadcast(projectId, {
+        type: "reconstruction.status_changed",
+        data: { status: "queued", progress: 0 },
+      });
+
+      // Start the reconstruction process
+      const photogrammetryWorker = (await import("./worker")).photogrammetryWorker;
+      await photogrammetryWorker.startPhotogrammetryJob(projectId, photos.map(p => p.id));
+
+      res.status(201).json({
+        projectId,
+        jobId: job.id,
+        status: "queued",
+        imageCount: photos.length,
+        message: "3D reconstruction started"
+      });
+    } catch (error) {
+      console.error("Error starting reconstruction:", error);
+      if (req.files) {
+        (req.files as Express.Multer.File[]).forEach(f => cleanupFile(f.path));
+      }
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

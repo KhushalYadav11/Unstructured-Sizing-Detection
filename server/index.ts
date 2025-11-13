@@ -89,9 +89,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Body parsing with size limits
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: false, limit: '10mb' }));
+// Body parsing with size limits (increased for large file uploads)
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ extended: false, limit: '500mb' }));
 
 
 // Serve uploaded files

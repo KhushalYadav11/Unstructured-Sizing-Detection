@@ -63,9 +63,9 @@ export function MeshProcessor() {
         return;
       }
       
-      // Validate file size (50MB limit)
-      if (selectedFile.size > 50 * 1024 * 1024) {
-        setError('File size too large. Please select a file smaller than 50MB.');
+      // Validate file size (500MB limit)
+      if (selectedFile.size > 500 * 1024 * 1024) {
+        setError('File size too large. Please select a file smaller than 500MB.');
         return;
       }
       

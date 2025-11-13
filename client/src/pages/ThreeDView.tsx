@@ -101,15 +101,17 @@ export default function ThreeDView() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 min-h-0 p-0">
-          <div className="h-full min-h-[600px]">
+          <div className="h-full min-h-[600px] flex flex-col">
             {showComparison ? (
               <ModelComparison />
             ) : (
-              <ThreeDViewer
-                measurementMode={measurementMode}
-                onMeasurementToggle={() => setMeasurementMode(!measurementMode)}
-                onModelMetrics={setModelMetrics}
-              />
+              <div className="flex-1 min-h-0">
+                <ThreeDViewer
+                  measurementMode={measurementMode}
+                  onMeasurementToggle={() => setMeasurementMode(!measurementMode)}
+                  onModelMetrics={setModelMetrics}
+                />
+              </div>
             )}
           </div>
         </CardContent>

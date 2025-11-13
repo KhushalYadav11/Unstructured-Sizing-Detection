@@ -25,7 +25,7 @@ export default function MeshAnalysis() {
           </CardHeader>
           <CardContent>
             <CardDescription>
-              Support for .obj, .ply, and .stl file formats up to 50MB
+              Support for .obj, .ply, and .stl file formats up to 500MB
             </CardDescription>
           </CardContent>
         </Card>
@@ -95,7 +95,7 @@ export default function MeshAnalysis() {
                 <li>• Use Meshroom or similar software to generate 3D models from photos</li>
                 <li>• Ensure the model is a closed mesh for accurate volume calculation</li>
                 <li>• Supported formats: .obj, .ply, .stl</li>
-                <li>• Maximum file size: 50MB</li>
+                <li>• Maximum file size: 500MB</li>
               </ul>
             </div>
             

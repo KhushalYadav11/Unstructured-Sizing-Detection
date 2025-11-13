@@ -122,11 +122,11 @@ export function CreateProjectDialog({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      // Validate file size (max 50MB)
-      if (selectedFile.size > 50 * 1024 * 1024) {
+      // Validate file size (max 500MB)
+      if (selectedFile.size > 500 * 1024 * 1024) {
         toast({
           title: "File Too Large",
-          description: "File size must be less than 50MB",
+          description: "File size must be less than 500MB",
           variant: "destructive",
         });
         return;
@@ -181,7 +181,7 @@ export function CreateProjectDialog({
                     </p>
                   </div>
                 ) : (
-                  "Click to upload .obj file (max 50MB)"
+                  "Click to upload .obj file (max 500MB)"
                 )}
               </Label>
             </div>

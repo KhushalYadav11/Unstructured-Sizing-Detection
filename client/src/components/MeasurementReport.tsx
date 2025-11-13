@@ -4,6 +4,7 @@ import { FileText, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Unit } from "@/lib/three-utils";
+import * as THREE from "three";
 
 interface MeasurementReportProps {
   measurementPoints: THREE.Vector3[];

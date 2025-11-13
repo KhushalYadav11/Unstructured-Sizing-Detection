@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ThreeDViewer } from "./ThreeDViewer";
-import { SplitHorizontal, X } from "lucide-react";
+import { SquareSplitHorizontal, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function ModelComparison() {
@@ -21,7 +21,7 @@ export function ModelComparison() {
                   onClick={() => setShowComparison(true)}
                   className="flex items-center gap-2"
                 >
-                  <SplitHorizontal className="h-4 w-4" />
+                  <SquareSplitHorizontal className="h-4 w-4" />
                   <span>Compare Models</span>
                 </Button>
               </TooltipTrigger>
