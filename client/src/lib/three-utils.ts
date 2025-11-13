@@ -146,3 +146,199 @@ function signedTetraVolume(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3)
   // Volume of tetrahedron formed by triangle ABC and origin
   return a.dot(b.clone().cross(c)) / 6.0;
 }
+
+// --- Coal Pile Accuracy Utilities ---
+
+export interface CoalPileMetrics {
+  planeOrigin: THREE.Vector3;
+  planeNormal: THREE.Vector3;
+  dimensions: { length: number; width: number; height: number };
+  volume: number;
+}
+
+/**
+ * Estimate a ground plane from the lowest percentile of mesh vertices (world space).
+ * Uses PCA on bottom-percent points to get a robust plane normal.
+ */
+export function estimateGroundPlane(object: THREE.Object3D, bottomPercent = 0.1): { origin: THREE.Vector3; normal: THREE.Vector3 } {
+  const points: THREE.Vector3[] = [];
+  object.updateMatrixWorld(true);
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const geom = mesh.geometry as THREE.BufferGeometry;
+    const pos = geom.getAttribute("position") as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i += Math.max(1, Math.floor(pos.count / 5000))) {
+      const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+      v.applyMatrix4(mesh.matrixWorld);
+      points.push(v);
+    }
+  });
+
+  if (points.length < 3) {
+    // Fallback to global XY plane
+    return { origin: new THREE.Vector3(0, 0, 0), normal: new THREE.Vector3(0, 1, 0) };
+  }
+
+  // Sort by height (Y) and take bottom percentile
+  points.sort((a, b) => a.y - b.y);
+  const count = Math.max(3, Math.floor(points.length * bottomPercent));
+  const subset = points.slice(0, count);
+
+  // Compute mean
+  const mean = subset.reduce((acc, p) => acc.add(p), new THREE.Vector3()).multiplyScalar(1 / subset.length);
+
+  // Compute covariance matrix of subset
+  let cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+  for (const p of subset) {
+    const x = p.x - mean.x;
+    const y = p.y - mean.y;
+    const z = p.z - mean.z;
+    cxx += x * x; cxy += x * y; cxz += x * z;
+    cyy += y * y; cyz += y * z; czz += z * z;
+  }
+  const n = subset.length;
+  cxx /= n; cxy /= n; cxz /= n; cyy /= n; cyz /= n; czz /= n;
+
+  // Solve for smallest eigenvector of covariance matrix (approximate via power iterations on inverse)
+  // Simple heuristic: try three initial normals and refine
+  const candidates = [
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(0, 0, 1),
+  ];
+  function covMul(v: THREE.Vector3): THREE.Vector3 {
+    // Multiply covariance matrix by vector v
+    return new THREE.Vector3(
+      cxx * v.x + cxy * v.y + cxz * v.z,
+      cxy * v.x + cyy * v.y + cyz * v.z,
+      cxz * v.x + cyz * v.y + czz * v.z,
+    );
+  }
+  let normal = new THREE.Vector3(0, 1, 0);
+  let minVal = Number.POSITIVE_INFINITY;
+  for (const init of candidates) {
+    let v = init.clone().normalize();
+    // Power iteration variants to approximate smallest eigenvector using inverse iteration
+    for (let i = 0; i < 12; i++) {
+      const w = covMul(v);
+      const len = w.length();
+      if (len > 1e-8) v.copy(w).divideScalar(len);
+    }
+    const val = covMul(v).dot(v);
+    if (val < minVal) { minVal = val; normal.copy(v); }
+  }
+  normal.normalize();
+
+  // Ensure normal points upward relative to world Y
+  if (normal.y < 0) normal.multiplyScalar(-1);
+  return { origin: mean, normal };
+}
+
+/**
+ * Compute coal pile metrics by raycasting along the estimated ground plane normal
+ * and integrating height over a grid. This assumes no overhangs (typical for piles).
+ */
+export function computeCoalPileMetrics(object: THREE.Object3D, options?: { gridResolution?: number; bottomPercent?: number }): CoalPileMetrics {
+  const gridResolution = options?.gridResolution ?? 0.1; // meters per cell
+  const bottomPercent = options?.bottomPercent ?? 0.1;
+
+  const { origin, normal } = estimateGroundPlane(object, bottomPercent);
+
+  // Build local frame (u, v, n)
+  const n = normal.clone().normalize();
+  const arbitrary = Math.abs(n.dot(new THREE.Vector3(1, 0, 0))) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+  const u = arbitrary.clone().sub(n.clone().multiplyScalar(arbitrary.dot(n))).normalize();
+  const v = new THREE.Vector3().crossVectors(n, u).normalize();
+
+  // Bounding box in local UV frame
+  const box = new THREE.Box3().setFromObject(object);
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ];
+  const toLocal = (p: THREE.Vector3) => new THREE.Vector3(
+    p.clone().sub(origin).dot(u),
+    p.clone().sub(origin).dot(v),
+    p.clone().sub(origin).dot(n),
+  );
+  const uvBounds = corners.map(toLocal);
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const q of uvBounds) {
+    minU = Math.min(minU, q.x); maxU = Math.max(maxU, q.x);
+    minV = Math.min(minV, q.y); maxV = Math.max(maxV, q.y);
+  }
+
+  // Raycaster setup
+  const raycaster = new THREE.Raycaster();
+  raycaster.firstHitOnly = true as any; // prefer first hit
+
+  // For performance, merge meshes into a group reference
+  const target = new THREE.Group();
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const clone = mesh.clone();
+    // Ensure world transforms are baked
+    clone.updateMatrixWorld(true);
+    target.add(clone);
+  });
+
+  const area = gridResolution * gridResolution;
+  let volume = 0;
+  let minHeight = Infinity, maxHeight = -Infinity;
+  let minUx = Infinity, maxUx = -Infinity, minVy = Infinity, maxVy = -Infinity;
+
+  // Cap sampling density to avoid UI lockups
+  const maxCells = 20000;
+  const uSpan = maxU - minU;
+  const vSpan = maxV - minV;
+  let uStep = gridResolution;
+  let vStep = gridResolution;
+  const estCells = Math.ceil(uSpan / uStep) * Math.ceil(vSpan / vStep);
+  if (estCells > maxCells) {
+    const scale = Math.sqrt(estCells / maxCells);
+    uStep *= scale;
+    vStep *= scale;
+  }
+
+  for (let uVal = minU; uVal <= maxU; uVal += uStep) {
+    for (let vVal = minV; vVal <= maxV; vVal += vStep) {
+      // World-space point above the plane at some offset along +n
+      const planePoint = origin.clone().add(u.clone().multiplyScalar(uVal)).add(v.clone().multiplyScalar(vVal));
+      const rayOrigin = planePoint.clone().add(n.clone().multiplyScalar(10 * Math.max(uSpan, vSpan))); // far above
+      const rayDir = n.clone().multiplyScalar(-1);
+      raycaster.set(rayOrigin, rayDir);
+      const hits = raycaster.intersectObject(target, true);
+      if (hits.length > 0) {
+        const p = hits[0].point;
+        const height = p.clone().sub(planePoint).dot(n);
+        if (height > 0) {
+          volume += height * area;
+          minHeight = Math.min(minHeight, height);
+          maxHeight = Math.max(maxHeight, height);
+          minUx = Math.min(minUx, uVal); maxUx = Math.max(maxUx, uVal);
+          minVy = Math.min(minVy, vVal); maxVy = Math.max(maxVy, vVal);
+        }
+      }
+    }
+  }
+
+  // Dimensions along plane axes and height
+  const length = Math.max(0, maxUx - minUx);
+  const width = Math.max(0, maxVy - minVy);
+  const height = Math.max(0, maxHeight);
+
+  return {
+    planeOrigin: origin,
+    planeNormal: n,
+    dimensions: { length, width, height },
+    volume,
+  };
+}
