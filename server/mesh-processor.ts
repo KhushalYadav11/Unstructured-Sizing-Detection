@@ -39,67 +39,71 @@ export class MeshProcessor {
   private parseObjFile(filePath: string): { vertices: number[][]; faces: number[][] } {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
-    
+
     const vertices: number[][] = [];
-    const faces: number[][] = [];
-    
+    const triangles: number[][] = [];
+
+    const parseIndex = (token: string): number => {
+      const raw = parseInt(token.split('/')[0], 10);
+      if (Number.isNaN(raw)) return -1;
+      if (raw > 0) return raw - 1;
+      const idx = vertices.length + raw; // negative indices are relative to end
+      return idx;
+    };
+
     for (const line of lines) {
       const trimmed = line.trim();
-      
+
       if (trimmed.startsWith('v ')) {
-        // Vertex line: v x y z
         const parts = trimmed.split(/\s+/);
         if (parts.length >= 4) {
-          vertices.push([
-            parseFloat(parts[1]),
-            parseFloat(parts[2]),
-            parseFloat(parts[3])
-          ]);
+          const x = parseFloat(parts[1]);
+          const y = parseFloat(parts[2]);
+          const z = parseFloat(parts[3]);
+          vertices.push([x, y, z]);
         }
       } else if (trimmed.startsWith('f ')) {
-        // Face line: f v1 v2 v3 (1-indexed)
         const parts = trimmed.split(/\s+/);
         if (parts.length >= 4) {
-          const face = [];
+          const indices: number[] = [];
           for (let i = 1; i < parts.length; i++) {
-            // Handle face formats like "v/vt/vn" or just "v"
-            const vertexIndex = parseInt(parts[i].split('/')[0]) - 1; // Convert to 0-indexed
-            face.push(vertexIndex);
+            const idx = parseIndex(parts[i]);
+            if (idx >= 0) indices.push(idx);
           }
-          faces.push(face);
+          if (indices.length >= 3) {
+            for (let i = 1; i < indices.length - 1; i++) {
+              triangles.push([indices[0], indices[i], indices[i + 1]]);
+            }
+          }
         }
       }
     }
-    
-    return { vertices, faces };
+
+    return { vertices, faces: triangles };
   }
 
   /**
    * Calculate volume using the divergence theorem (mesh must be closed)
    */
   private calculateVolume(vertices: number[][], faces: number[][]): number {
+    if (vertices.length === 0 || faces.length === 0) return 0;
+    const bbox = this.calculateBoundingBox(vertices);
+    const cx = (bbox.min.x + bbox.max.x) / 2;
+    const cy = (bbox.min.y + bbox.max.y) / 2;
+    const cz = (bbox.min.z + bbox.max.z) / 2;
+
     let volume = 0;
-    
-    for (const face of faces) {
-      if (face.length >= 3) {
-        // For triangular faces, use the signed volume of tetrahedron
-        const v0 = vertices[face[0]];
-        const v1 = vertices[face[1]];
-        const v2 = vertices[face[2]];
-        
-        if (v0 && v1 && v2) {
-          // Calculate signed volume of tetrahedron formed by origin and triangle
-          const signedVolume = (
-            v0[0] * (v1[1] * v2[2] - v1[2] * v2[1]) +
-            v1[0] * (v2[1] * v0[2] - v2[2] * v0[1]) +
-            v2[0] * (v0[1] * v1[2] - v0[2] * v1[1])
-          ) / 6;
-          
-          volume += signedVolume;
-        }
-      }
+    for (const f of faces) {
+      const a = vertices[f[0]];
+      const b = vertices[f[1]];
+      const c = vertices[f[2]];
+      if (!a || !b || !c) continue;
+      const ax = a[0] - cx, ay = a[1] - cy, az = a[2] - cz;
+      const bx = b[0] - cx, by = b[1] - cy, bz = b[2] - cz;
+      const cx2 = c[0] - cx, cy2 = c[1] - cy, cz2 = c[2] - cz;
+      const signed = (ax * (by * cz2 - bz * cy2) + bx * (cy2 * az - cz2 * ay) + cx2 * (ay * bz - az * by)) / 6;
+      volume += signed;
     }
-    
     return Math.abs(volume);
   }
 
