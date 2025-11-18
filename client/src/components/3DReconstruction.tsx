@@ -4,6 +4,7 @@ import { OrbitControls, Html, useProgress } from "@react-three/drei";
 import * as THREE from "three";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader";
+import { processMeshByUrl } from "@/lib/mesh-api";
 
 function Loader() {
   const { progress } = useProgress();
@@ -16,6 +17,8 @@ export default function Reconstruction() {
   const [status, setStatus] = useState<string>("idle");
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<any | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     if (!jobId) return;
@@ -89,11 +92,34 @@ export default function Reconstruction() {
     setStatus("queued");
   };
 
+  const onAnalyze = async () => {
+    if (!modelUrl) return;
+    try {
+      setAnalyzing(true);
+      const res = await processMeshByUrl(modelUrl);
+      setAnalysis(res);
+    } catch (err) {
+      alert((err as Error).message || "Failed to analyze mesh");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   return (
     <div style={{ display: "flex", gap: 16 }}>
       <form onSubmit={onSubmit} style={{ width: 320 }}>
         <h3>3D Reconstruction</h3>
-        <input type="file" accept="image/*" multiple onChange={(e) => setFiles(e.target.files)} />
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          // Allow folder selection in supporting browsers
+          // @ts-expect-error non-standard attribute
+          webkitdirectory
+          // @ts-expect-error non-standard attribute
+          directory
+          onChange={(e) => setFiles(e.target.files)}
+        />
         <div style={{ marginTop: 12 }}>
           <button type="submit">Start Reconstruction</button>
         </div>
@@ -114,6 +140,21 @@ export default function Reconstruction() {
           </Canvas>
         ) : (
           <div style={{ padding: 20 }}>{status === "idle" ? "Upload images to begin." : `Waiting: ${status}`}</div>
+        )}
+        {modelUrl && (
+          <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #eee" }}>
+            <a href={modelUrl} download style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 6 }}>Download Model</a>
+            <button onClick={onAnalyze} disabled={analyzing} style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 6 }}>
+              {analyzing ? "Analyzing..." : "Analyze Dimensions & Weight"}
+            </button>
+          </div>
+        )}
+        {analysis && (
+          <div style={{ padding: 12, fontSize: 14 }}>
+            <div><strong>Volume:</strong> {analysis.volume.toFixed(3)} m³</div>
+            <div><strong>Weight:</strong> {analysis.weight.toFixed(1)} kg</div>
+            <div><strong>Dimensions:</strong> L {analysis.dimensions.length.toFixed(2)} m × W {analysis.dimensions.width.toFixed(2)} m × H {analysis.dimensions.height.toFixed(2)} m</div>
+          </div>
         )}
       </div>
     </div>
