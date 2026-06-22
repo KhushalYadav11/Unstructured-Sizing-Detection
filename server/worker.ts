@@ -3,10 +3,17 @@ import { jobQueue, type JobQueueItem, type JobResult } from "./queue";
 import { eventBroadcaster } from "./events";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
-import * as glob from "glob";
+import {
+  checkNodeOdmHealth,
+  createOdmTask,
+  getOdmTaskInfo,
+  downloadOdmOutput,
+  ODM_STATUS,
+} from "./nodeodm-client";
 
-// Mock photogrammetry processing
+// How often to poll NodeODM for progress (ms)
+const POLL_INTERVAL_MS = 3000;
+
 class PhotogrammetryWorker {
   constructor() {
     this.setupQueueHandlers();
@@ -20,43 +27,21 @@ class PhotogrammetryWorker {
 
   private async processJob(item: JobQueueItem): Promise<void> {
     const { jobId, projectId, photoIds, attempt } = item;
-
     try {
-      console.log(`Starting photogrammetry job ${jobId} for project ${projectId} (attempt ${attempt})`);
-
-      // Update job status to processing
+      console.log(`[worker] Starting job ${jobId} for project ${projectId} (attempt ${attempt})`);
       await storage.updatePhotogrammetryJob(jobId, {
         status: "processing",
         startedAt: new Date(),
       });
-
-      // Broadcast status change
       eventBroadcaster.broadcast(projectId, {
         type: "reconstruction.status_changed",
-        data: { status: "processing", progress: 10 },
+        data: { status: "processing", progress: 5 },
       });
 
-      // Simulate processing steps with progress updates
-      await this.simulateProcessing(projectId, jobId);
-
-      // Generate mock artifacts
-      const artifacts = await this.generateMockArtifacts(projectId, jobId);
-
-      // Complete the job
-      const result: JobResult = {
-        success: true,
-        artifacts,
-        metrics: {
-          runtimeMs: 30000 + Math.random() * 60000, // 30-90 seconds
-          avgCpu: 70 + Math.random() * 20,
-          maxMemoryMb: 2048 + Math.random() * 2048,
-        },
-      };
-
-      await this.completeJob(jobId, result);
-
+      // photoIds here are file paths stored during upload
+      await this.runNodeOdmJob(projectId, jobId, photoIds);
     } catch (error) {
-      console.error(`Job ${jobId} failed:`, error);
+      console.error(`[worker] Job ${jobId} failed:`, error);
       await this.failJob(jobId, {
         code: "processing_error",
         message: error instanceof Error ? error.message : "Unknown processing error",
@@ -64,175 +49,209 @@ class PhotogrammetryWorker {
     }
   }
 
-  private async simulateProcessing(projectId: string, jobId: string): Promise<void> {
-    const steps = [
-      { step: "feature_detection", progress: 20, duration: 2000 },
-      { step: "feature_matching", progress: 40, duration: 3000 },
-      { step: "sparse_reconstruction", progress: 60, duration: 4000 },
-      { step: "dense_reconstruction", progress: 80, duration: 5000 },
-      { step: "texturing", progress: 95, duration: 3000 },
-    ];
+  /**
+   * Main NodeODM integration.
+   * Uploads images, polls for progress, downloads output, completes job.
+   */
+  private async runNodeOdmJob(
+    projectId: string,
+    jobId: string,
+    imagePaths: string[]
+  ): Promise<void> {
+    const startedAt = Date.now();
 
-    for (const { step, progress, duration } of steps) {
-      await new Promise(resolve => setTimeout(resolve, duration));
-
-      // Update reconstruction state
-      await storage.updateProjectReconstruction(projectId, {
-        progress,
-        currentStep: step,
-      });
-
-      // Broadcast progress update
-      eventBroadcaster.broadcast(projectId, {
-        type: "reconstruction.status_changed",
-        data: { status: "processing", progress, currentStep: step },
-      });
+    // 1. Health check
+    const healthy = await checkNodeOdmHealth();
+    if (!healthy) {
+      throw new Error(
+        "NodeODM is not reachable. Make sure it is running: docker run -p 3000:3000 opendronemap/nodeodm"
+      );
     }
+
+    // 2. Filter to existing image files
+    const validPaths = imagePaths.filter((p) => fs.existsSync(p));
+    if (validPaths.length === 0) {
+      throw new Error("No valid image files found to process");
+    }
+
+    console.log(`[worker] Submitting ${validPaths.length} images to NodeODM`);
+
+    // 3. Create NodeODM task and upload images
+    const odmTaskUuid = await createOdmTask(
+      validPaths,
+      {
+        dsm: true,          // Digital Surface Model — needed for volume
+        dtm: false,
+        featureQuality: (process.env.NODE_ODM_FEATURE_QUALITY as any) || "ultra",
+        pcQuality: (process.env.NODE_ODM_PC_QUALITY as any) || "ultra",
+        meshSize: parseInt(process.env.NODE_ODM_MESH_SIZE || "500000"),
+        minNumFeatures: parseInt(process.env.NODE_ODM_MIN_NUM_FEATURES || "10000"),
+        matcherNeighbors: parseInt(process.env.NODE_ODM_MATCHER_NEIGHBORS || "12"),
+        texturingDataTerm: "area",     // Better texture mapping
+        texturingNaiveBayes: true,     // Improved texture blending
+        meshOctreeDepth: parseInt(process.env.NODE_ODM_MESH_OCTREE_DEPTH || "11"),
+        useOpensfm: true,              // Use OpenSfM for better feature matching
+      },
+      `coal-project-${projectId}`
+    );
+
+    console.log(`[worker] NodeODM task created: ${odmTaskUuid}`);
+
+    // Store the ODM task UUID in the job engine field for reference
+    await storage.updatePhotogrammetryJob(jobId, {
+      engine: `nodeodm:${odmTaskUuid}`,
+    });
+
+    // 4. Poll for completion
+    await this.pollOdmTask(odmTaskUuid, projectId, jobId);
+
+    // 5. Download output
+    const uploadsDir = path.join(process.cwd(), "uploads");
+    const outputDir = path.join(uploadsDir, "projects", projectId, "reconstruction", "odm_output");
+
+    console.log(`[worker] Downloading NodeODM output for task ${odmTaskUuid}`);
+    const { objPath } = await downloadOdmOutput(odmTaskUuid, outputDir);
+
+    if (!objPath) {
+      throw new Error("NodeODM completed but no mesh file (.obj/.ply) was found in output");
+    }
+
+    console.log(`[worker] Mesh found at: ${objPath}`);
+
+    // 6. Build result
+    const ext = path.extname(objPath).replace(".", "");
+    const result: JobResult = {
+      success: true,
+      artifacts: {
+        mesh: { format: ext, localPath: objPath },
+      },
+      metrics: {
+        runtimeMs: Date.now() - startedAt,
+      },
+    };
+
+    await this.completeJob(jobId, result);
   }
 
-  private async generateMockArtifacts(projectId: string, jobId: string): Promise<JobResult["artifacts"]> {
-    const uploadsDir = path.join(process.cwd(), "uploads");
-    const projectDir = path.join(uploadsDir, "projects", projectId, "reconstruction");
-
-    // Ensure directory exists
-    if (!fs.existsSync(projectDir)) {
-      fs.mkdirSync(projectDir, { recursive: true });
-    }
-
-    // Generate mock OBJ mesh
-    const meshPath = path.join(projectDir, "mesh.obj");
-    const mockObjContent = `# Mock photogrammetry mesh for project ${projectId}
-# Generated at ${new Date().toISOString()}
-
-v 0.0 0.0 0.0
-v 1.0 0.0 0.0
-v 0.5 1.0 0.0
-v 0.5 0.5 1.0
-
-f 1 2 3
-f 1 2 4
-f 1 3 4
-f 2 3 4
-`;
-    fs.writeFileSync(meshPath, mockObjContent);
-
-    // Generate mock point cloud
-    const pointCloudPath = path.join(projectDir, "cloud.ply");
-    const mockPlyContent = `ply
-format ascii 1.0
-element vertex 4
-property float x
-property float y
-property float z
-end_header
-0.0 0.0 0.0
-1.0 0.0 0.0
-0.5 1.0 0.0
-0.5 0.5 1.0
-`;
-    fs.writeFileSync(pointCloudPath, mockPlyContent);
-
-    // Generate mock texture
-    const texturePath = path.join(projectDir, "albedo.jpg");
-    // Create a minimal 1x1 pixel JPEG (this is just a placeholder)
-    const minimalJpeg = Buffer.from([
-      0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-      0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x11,
-      0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01,
-      0x03, 0x11, 0x01, 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x08, 0xFF, 0xC4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
-      0xDA, 0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3F,
-      0x00, 0x00, 0xFF, 0xD9
-    ]);
-    fs.writeFileSync(texturePath, minimalJpeg);
-
-    // Generate mock logs
-    const logsPath = path.join(projectDir, "logs", "latest.log");
-    const logsDir = path.dirname(logsPath);
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
-    const mockLogs = `[${new Date().toISOString()}] Photogrammetry processing started
-[${new Date().toISOString()}] Feature detection completed
-[${new Date().toISOString()}] Sparse reconstruction completed
-[${new Date().toISOString()}] Dense reconstruction completed
-[${new Date().toISOString()}] Texturing completed
-[${new Date().toISOString()}] Processing finished successfully
-`;
-    fs.writeFileSync(logsPath, mockLogs);
-
-    return {
-      mesh: { format: "obj", localPath: meshPath },
-      pointCloud: { format: "ply", localPath: pointCloudPath },
-      textures: [{ name: "albedo.jpg", localPath: texturePath }],
+  /**
+   * Poll NodeODM task until it completes, fails, or is cancelled.
+   * Broadcasts progress updates to the client.
+   */
+  private async pollOdmTask(
+    odmTaskUuid: string,
+    projectId: string,
+    jobId: string
+  ): Promise<void> {
+    const ODM_STEP_LABELS: Record<number, string> = {
+      10: "queued",
+      20: "processing",
+      30: "failed",
+      40: "completed",
+      50: "cancelled",
     };
+
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+      const info = await getOdmTaskInfo(odmTaskUuid);
+      const statusCode = info.status?.code;
+      const progress = Math.round(info.progress ?? 0);
+
+      console.log(`[worker] ODM task ${odmTaskUuid}: status=${statusCode}, progress=${progress}%`);
+
+      // Broadcast progress to frontend
+      await storage.updateProjectReconstruction(projectId, {
+        progress,
+        currentStep: ODM_STEP_LABELS[statusCode] ?? "processing",
+      });
+      eventBroadcaster.broadcast(projectId, {
+        type: "reconstruction.status_changed",
+        data: {
+          status: "processing",
+          progress,
+          currentStep: ODM_STEP_LABELS[statusCode] ?? "processing",
+        },
+      });
+
+      if (statusCode === ODM_STATUS.COMPLETED) {
+        console.log(`[worker] ODM task ${odmTaskUuid} completed`);
+        return;
+      }
+
+      if (statusCode === ODM_STATUS.FAILED) {
+        throw new Error(`NodeODM processing failed for task ${odmTaskUuid}`);
+      }
+
+      if (statusCode === ODM_STATUS.CANCELLED) {
+        throw new Error(`NodeODM task ${odmTaskUuid} was cancelled`);
+      }
+    }
   }
 
   private async completeJob(jobId: string, result: JobResult): Promise<void> {
     const job = await storage.getPhotogrammetryJob(jobId);
     if (!job) {
-      console.error(`Job ${jobId} not found during completion`);
+      console.error(`[worker] Job ${jobId} not found during completion`);
       return;
     }
 
-    // Ensure reconstruction dir exists and copy artifacts there with stable URLs
     const uploadsRoot = path.join(process.cwd(), "uploads");
     const reconDir = path.join(uploadsRoot, "projects", job.projectId, "reconstruction");
     if (!fs.existsSync(reconDir)) fs.mkdirSync(reconDir, { recursive: true });
 
-    // Build artifacts and copy files into reconstruction folder
-    const artifacts = result.artifacts ? (() => {
-      const a: any = {};
-      if (result.artifacts.mesh) {
-        const src = result.artifacts.mesh.localPath;
-        const basename = path.basename(src);
-        const dest = path.join(reconDir, basename);
-        try { if (src !== dest) fs.copyFileSync(src, dest); } catch (e) { /* best-effort */ }
-        a.mesh = {
-          format: result.artifacts.mesh.format,
-          url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
-          sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
-        };
-      }
-      if (result.artifacts.pointCloud) {
-        const src = result.artifacts.pointCloud.localPath;
-        const basename = path.basename(src);
-        const dest = path.join(reconDir, basename);
-        try { if (src !== dest) fs.copyFileSync(src, dest); } catch (e) { /* best-effort */ }
-        a.pointCloud = {
-          format: result.artifacts.pointCloud.format,
-          url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
-          sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
-        };
-      }
-      if (result.artifacts.textures) {
-        a.textures = result.artifacts.textures.map((tex) => {
-          const src = tex.localPath;
-          const basename = tex.name || path.basename(src);
-          const dest = path.join(reconDir, basename);
-          try { if (src !== dest) fs.copyFileSync(src, dest); } catch (e) { /* best-effort */ }
-          return {
-            name: basename,
-            url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
-            sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
-          };
-        });
-      }
-      return a;
-    })() : null;
+    // Copy artifacts to stable URL location
+    const artifacts = result.artifacts
+      ? (() => {
+          const a: any = {};
+          if (result.artifacts!.mesh) {
+            const src = result.artifacts!.mesh.localPath;
+            const basename = path.basename(src);
+            const dest = path.join(reconDir, basename);
+            try {
+              if (src !== dest) fs.copyFileSync(src, dest);
+            } catch {}
+            a.mesh = {
+              format: result.artifacts!.mesh.format,
+              url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
+              sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
+            };
+          }
+          if (result.artifacts!.pointCloud) {
+            const src = result.artifacts!.pointCloud.localPath;
+            const basename = path.basename(src);
+            const dest = path.join(reconDir, basename);
+            try {
+              if (src !== dest) fs.copyFileSync(src, dest);
+            } catch {}
+            a.pointCloud = {
+              format: result.artifacts!.pointCloud.format,
+              url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
+              sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
+            };
+          }
+          if (result.artifacts!.textures) {
+            a.textures = result.artifacts!.textures.map((tex) => {
+              const src = tex.localPath;
+              const basename = tex.name || path.basename(src);
+              const dest = path.join(reconDir, basename);
+              try {
+                if (src !== dest) fs.copyFileSync(src, dest);
+              } catch {}
+              return {
+                name: basename,
+                url: `/uploads/projects/${job.projectId}/reconstruction/${basename}`,
+                sizeBytes: fs.existsSync(dest) ? fs.statSync(dest).size : undefined,
+              };
+            });
+          }
+          return a;
+        })()
+      : null;
 
-    // Update job record
     await storage.updatePhotogrammetryJob(jobId, {
       status: "succeeded",
       finishedAt: new Date(),
-      engine: "mock-photogrammetry-v1.0",
       metrics: result.metrics,
-      logs: {
-        previewUrl: `/uploads/projects/${job.projectId}/logs/latest.log`,
-        downloadUrl: `/uploads/projects/${job.projectId}/logs/latest.log`,
-      },
     });
 
     await storage.updateProjectReconstruction(job.projectId, {
@@ -242,7 +261,6 @@ end_header
       artifacts,
     });
 
-    // Broadcast completion
     eventBroadcaster.broadcast(job.projectId, {
       type: "reconstruction.ready",
       data: {
@@ -253,232 +271,102 @@ end_header
       },
     });
 
-    // Mark queue job as complete
     jobQueue.completeJob(jobId, result);
+    console.log(`[worker] Job ${jobId} completed successfully`);
   }
 
-  private async failJob(jobId: string, error: { code: string; message: string }): Promise<void> {
+  private async failJob(
+    jobId: string,
+    error: { code: string; message: string }
+  ): Promise<void> {
     const job = await storage.getPhotogrammetryJob(jobId);
     if (!job) {
-      console.error(`Job ${jobId} not found during failure`);
+      console.error(`[worker] Job ${jobId} not found during failure`);
       return;
     }
 
-    // Update job record
     await storage.updatePhotogrammetryJob(jobId, {
       status: "failed",
       finishedAt: new Date(),
-      failure: {
-        code: error.code as any,
-        message: error.message,
-      },
+      failure: { code: error.code as any, message: error.message },
     });
 
-    // Update project reconstruction state
     await storage.updateProjectReconstruction(job.projectId, {
       status: "failed",
-      failureReason: {
-        code: error.code as any,
-        message: error.message,
-      },
+      failureReason: { code: error.code as any, message: error.message },
     });
 
-    // Broadcast failure
     eventBroadcaster.broadcast(job.projectId, {
       type: "reconstruction.failed",
       data: { failureReason: error.message },
     });
 
-    // Mark queue job as failed
     jobQueue.failJob(jobId, error);
+    console.error(`[worker] Job ${jobId} failed: ${error.message}`);
   }
 
-  // Method to start processing a photogrammetry job
-  async startPhotogrammetryJob(projectId: string, photoIds: string[]): Promise<void> {
-    const job = await storage.createPhotogrammetryJob({
-      projectId,
-      status: "queued",
-    });
-
-    const queueItem: JobQueueItem = {
-      jobId: job.id,
-      projectId,
-      photoIds,
-      attempt: 1,
-    };
-
-    jobQueue.enqueue(queueItem);
-  }
-
-  // New: run Meshroom CLI for a given project input dir and output dir
-  private runMeshroom(inputDir: string, outputDir: string, logsPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // Use env override if provided; fallback to the provided Windows Meshroom.exe path.
-      // You can set process.env.MESHROOM_CLI to e.g. "meshroom_batch" on Linux.
-      const meshroomCli = process.env.MESHROOM_CLI || "D:\\Meshroom-2025.1.0-Windows\\Meshroom-2025.1.0\\Meshroom.exe";
-      // Ensure output dir exists
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-      }
-      // Ensure logs parent exists
-      const logsDir = path.dirname(logsPath);
-      if (!fs.existsSync(logsDir)) {
-        fs.mkdirSync(logsDir, { recursive: true });
-      }
-      const outStream = fs.createWriteStream(logsPath, { flags: "a" });
-
-      // Build a single shell-safe command string using JSON.stringify for safe quoting.
-      // Note: JSON.stringify returns a quoted string; strip surrounding quotes when not desired
-      const q = (s: string) => JSON.stringify(s);
-      const cmd = `${q(meshroomCli)} --input ${q(inputDir)} --output ${q(outputDir)}`;
-      console.log(`Starting Meshroom: ${cmd}`);
-      const proc = spawn(cmd, { stdio: ["ignore", "pipe", "pipe"], shell: true });
-
-      proc.stdout.on("data", (chunk) => {
-        outStream.write(`[stdout] ${chunk.toString()}`);
-      });
-      proc.stderr.on("data", (chunk) => {
-        outStream.write(`[stderr] ${chunk.toString()}`);
-      });
-
-      proc.on("error", (err) => {
-        outStream.end();
-        reject(err);
-      });
-
-      proc.on("close", (code) => {
-        outStream.end();
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Meshroom exited with code ${code}`));
-        }
-      });
-    });
-  }
-
-  // New: utility to find the generated model file (.obj or .fbx) under output dir
-  private async findGeneratedModel(outputDir: string): Promise<string | null> {
-    try {
-      // Use sync glob to avoid callback/typing differences across versions
-      const files = glob.sync("**/*.+(obj|fbx)", { cwd: outputDir, nodir: true, absolute: true });
-      if (!files || files.length === 0) return null;
-      // choose largest
-      let chosen = files[0];
-      let maxSize = 0;
-      try {
-        maxSize = fs.statSync(chosen).size;
-      } catch {
-        maxSize = 0;
-      }
-      for (const f of files) {
-        try {
-          const s = fs.statSync(f).size;
-          if (s > maxSize) {
-            maxSize = s;
-            chosen = f;
-          }
-        } catch {}
-      }
-      return chosen;
-    } catch {
-      return null;
-    }
-  }
-
-  // New: public method to start a Meshroom job from uploaded images
-  // Returns the created jobId and runs Meshroom in background (non-blocking)
+  /**
+   * Public entry point called by the /api/reconstruct route.
+   * Creates a job record and kicks off NodeODM processing in the background.
+   * Returns the jobId immediately so the API can respond.
+   */
   async startMeshroomJob(projectId: string, imagePaths: string[]): Promise<string> {
-    // Create job record
     const job = await storage.createPhotogrammetryJob({
       projectId,
       status: "queued",
     });
-
     const jobId = job.id;
 
-    // Ensure project upload image dir exists
+    // Copy uploaded images to a stable project directory
     const uploadsDir = path.join(process.cwd(), "uploads");
     const projectImagesDir = path.join(uploadsDir, "projects", projectId, "images");
     if (!fs.existsSync(projectImagesDir)) {
       fs.mkdirSync(projectImagesDir, { recursive: true });
     }
 
-    // If provided imagePaths are temporary locations, copy them under projectImagesDir
     const savedPaths: string[] = [];
     for (const src of imagePaths) {
-      const base = path.basename(src);
-      const dest = path.join(projectImagesDir, base);
-      if (src !== dest) {
-        try {
-          fs.copyFileSync(src, dest);
-        } catch (e) {
-          // best-effort: if copy fails, skip
-        }
+      const dest = path.join(projectImagesDir, path.basename(src));
+      try {
+        if (src !== dest) fs.copyFileSync(src, dest);
+        savedPaths.push(dest);
+      } catch {
+        savedPaths.push(src); // use original if copy fails
       }
-      savedPaths.push(dest);
     }
 
-    // Update job to processing (status visible immediately)
-    await storage.updatePhotogrammetryJob(jobId, {
-      status: "processing",
-      startedAt: new Date(),
-      attempt: (job.attempt || 1),
+    await storage.updateProjectReconstruction(projectId, {
+      status: "queued",
+      latestJobId: jobId,
     });
 
-    // Broadcast status
     eventBroadcaster.broadcast(projectId, {
       type: "reconstruction.status_changed",
-      data: { status: "processing", progress: 5 },
+      data: { status: "queued", progress: 0 },
     });
 
-    // Prepare output dirs and logs
-    const outputDir = path.join(uploadsDir, "projects", projectId, "reconstruction", "meshroom_output");
-    const logsPath = path.join(uploadsDir, "projects", projectId, "reconstruction", "logs", "meshroom.log");
-
-    // Run Meshroom in background
+    // Run in background — don't await
     (async () => {
       try {
-        await this.runMeshroom(projectImagesDir, outputDir, logsPath);
-
-        // Find model file
-        const modelPath = await this.findGeneratedModel(outputDir);
-
-        if (!modelPath) {
-          throw new Error("No model file (.obj/.fbx) found in Meshroom output");
-        }
-
-        // Build artifacts structure
-        const artifacts: JobResult["artifacts"] = {
-          mesh: { format: path.extname(modelPath).replace(".", ""), localPath: modelPath },
-          pointCloud: undefined,
-          textures: [],
-        };
-
-        const result: JobResult = {
-          success: true,
-          artifacts,
-          metrics: {
-            runtimeMs: 0,
-            avgCpu: 0,
-            maxMemoryMb: 0,
-          },
-        };
-
-        await this.completeJob(jobId, result);
+        await storage.updatePhotogrammetryJob(jobId, {
+          status: "processing",
+          startedAt: new Date(),
+        });
+        eventBroadcaster.broadcast(projectId, {
+          type: "reconstruction.status_changed",
+          data: { status: "processing", progress: 5 },
+        });
+        await this.runNodeOdmJob(projectId, jobId, savedPaths);
       } catch (err) {
-        console.error(`Meshroom job ${jobId} failed:`, err);
         await this.failJob(jobId, {
-          code: "meshroom_failed",
-          message: err instanceof Error ? err.message : "Meshroom processing failed",
+          code: "nodeodm_failed",
+          message: err instanceof Error ? err.message : String(err),
         });
       }
     })().catch((err) => {
-      // Ensure background errors are logged
-      console.error("Unhandled error in background Meshroom run:", err);
+      console.error("[worker] Unhandled background error:", err);
     });
 
-    // Return jobId immediately so API can respond without waiting for Meshroom
     return jobId;
   }
 }

@@ -78,7 +78,7 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
           Dimensions
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-5 space-y-4">
         <div className="space-y-2">
           <Label htmlFor="length">Length</Label>
           <div className="flex gap-2">
@@ -129,14 +129,6 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
           />
         </div>
 
-        <Button
-          className="w-full"
-          onClick={handleSave}
-          data-testid="button-save-measurement"
-        >
-          <Save className="h-4 w-4 mr-2" />
-          Save Measurement
-        </Button>
         {/* Coal Type Selection */}
         <div className="space-y-2">
           <Label htmlFor="coal-type">Coal Type</Label>
@@ -154,6 +146,15 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
           </Select>
         </div>
 
+        <Button
+          className="w-full"
+          onClick={handleSave}
+          data-testid="button-save-measurement"
+        >
+          <Save className="h-4 w-4 mr-2" />
+          Save Measurement
+        </Button>
+
         {/* Weight Display */}
         {weight !== null && (
           <div className="rounded-md bg-muted p-3 space-y-1">
@@ -169,15 +170,6 @@ export function MeasurementPanel({ onSave }: MeasurementPanelProps) {
             </div>
           </div>
         )}
-
-        <Button
-          className="w-full"
-          onClick={handleSave}
-          data-testid="button-save-measurement"
-        >
-          <Save className="h-4 w-4 mr-2" />
-          Save Measurement
-        </Button>
       </CardContent>
     </Card>
   );

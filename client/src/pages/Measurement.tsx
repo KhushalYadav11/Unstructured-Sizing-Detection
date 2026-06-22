@@ -191,7 +191,7 @@ export default function Measurement() {
               <CardHeader>
                 <CardTitle>Estimated Weight</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-5">
                 <div className="flex items-center justify-between">
                   <div
                     className="text-3xl font-mono font-bold text-primary"

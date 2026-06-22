@@ -2,17 +2,24 @@ import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/MetricCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QualityBadge } from "@/components/QualityBadge";
+import { EmptyState } from "@/components/EmptyState";
 import { COAL_TYPES } from "@/components/CoalTypeSelector";
 import {
   TrendingUp,
   Scale,
   FileCheck,
-  Clock,
   BarChart3,
   PieChart,
 } from "lucide-react";
 import { getTodayCount, getAnalyticsOverview } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+
+const qualityFillColor: Record<string, string> = {
+  excellent: "bg-chart-2",
+  good: "bg-chart-1",
+  fair: "bg-chart-3",
+  poor: "bg-destructive",
+};
 
 export default function Analytics() {
   const { data: todayData } = useQuery({
@@ -74,7 +81,7 @@ export default function Analytics() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
         <p className="text-muted-foreground">
           Measurement trends and quality insights
         </p>
@@ -122,7 +129,7 @@ export default function Analytics() {
                   Coal Type Distribution
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-5">
                 {coalDistribution.length > 0 ? (
                   <div className="space-y-4">
                     {coalDistribution.map((item, index) => (
@@ -156,21 +163,32 @@ export default function Analytics() {
               <CardHeader>
                 <CardTitle>Quality Assessment Distribution</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-4">
-                  {qualityMetrics.map((metric) => (
-                    <div
-                      key={metric.rating}
-                      className="rounded-lg border p-4 space-y-2"
-                    >
-                      <QualityBadge rating={metric.rating} />
-                      <div className="text-3xl font-bold">{metric.count}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {metric.percentage}% of total
+              <CardContent className="p-5">
+                {analytics && analytics.totalMeasurements > 0 ? (
+                  <div className="space-y-4">
+                    {qualityMetrics.map((metric) => (
+                      <div key={metric.rating} className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <QualityBadge rating={metric.rating} />
+                          <span className="text-sm font-mono font-medium">{metric.count}</span>
+                        </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className={qualityFillColor[metric.rating]}
+                            style={{ width: `${metric.percentage}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">{metric.percentage}% of total</p>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={BarChart3}
+                    title="No data yet"
+                    description="Measurements will appear here once recorded"
+                  />
+                )}
               </CardContent>
             </Card>
           </div>

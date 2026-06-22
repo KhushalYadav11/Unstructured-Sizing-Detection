@@ -23,7 +23,7 @@ export default function MeshAnalysis() {
               Upload Models
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-5">
             <CardDescription>
               Support for .obj, .ply, and .stl file formats up to 500MB
             </CardDescription>
@@ -37,7 +37,7 @@ export default function MeshAnalysis() {
               Auto Calculate
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-5">
             <CardDescription>
               Automatic volume calculation using geometric analysis
             </CardDescription>
@@ -51,7 +51,7 @@ export default function MeshAnalysis() {
               Export Results
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-5">
             <CardDescription>
               Download detailed analysis results in JSON format
             </CardDescription>
@@ -67,7 +67,7 @@ export default function MeshAnalysis() {
             Select the appropriate coal type for accurate weight estimation
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">Anthracite (1500 kg/m³)</Badge>
             <Badge variant="secondary">Bituminous Coal (1300 kg/m³)</Badge>
@@ -87,7 +87,7 @@ export default function MeshAnalysis() {
         <CardHeader>
           <CardTitle className="text-lg">How to Use</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-5 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-3">
               <h4 className="font-semibold">Step 1: Prepare Your Model</h4>

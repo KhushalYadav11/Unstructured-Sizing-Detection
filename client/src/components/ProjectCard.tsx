@@ -42,7 +42,7 @@ export function ProjectCard({
   
   return (
     <Card
-      className="hover-elevate active-elevate-2 cursor-pointer"
+      className="transition-shadow hover:shadow-md cursor-pointer"
       onClick={onClick}
       data-testid={`card-project-${name.toLowerCase().replace(/\s+/g, "-")}`}
     >
@@ -76,7 +76,7 @@ export function ProjectCard({
           <MoreVertical className="h-4 w-4" />
         </Button>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="p-5 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <Badge
             className={statusConfig[status].className}
@@ -140,7 +140,7 @@ export function ProjectCard({
           </div>
         )}
       </CardContent>
-      <CardFooter className="pt-0 pb-3 px-6 flex justify-between items-center">
+      <CardFooter className="pt-0 pb-4 px-5 flex justify-between items-center">
         <div className="flex items-center text-xs text-muted-foreground gap-1">
           <Calendar className="h-3 w-3" />
           <span data-testid="text-last-updated">Updated {lastUpdated}</span>

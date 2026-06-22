@@ -58,7 +58,7 @@ export default function ThreeDView() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
               <Box className="h-8 w-8 text-primary" />
               3D Model Viewer
             </h1>
@@ -126,7 +126,7 @@ export default function ThreeDView() {
               Extracted dimensions and statistics from the loaded 3D model
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-5">
             <div className="flex items-center gap-2 mb-4">
               <span className="text-sm text-muted-foreground">Display Units:</span>
               <Select value={displayUnit} onValueChange={(v) => setDisplayUnit(v as Unit)}>
@@ -190,7 +190,7 @@ export default function ThreeDView() {
         <CardHeader>
           <CardTitle className="text-lg">Viewer Features</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div className="space-y-2">
               <h4 className="font-semibold">Controls</h4>

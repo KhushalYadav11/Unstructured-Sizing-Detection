@@ -846,6 +846,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Process mesh by public uploads URL
+  app.post("/api/mesh/process-by-url", async (req, res) => {
+    try {
+      const { meshUrl, coalType = "bituminous" } = req.body as { meshUrl?: string; coalType?: string };
+      if (!meshUrl || typeof meshUrl !== "string") {
+        return res.status(400).json({ error: "meshUrl is required" });
+      }
+
+      // Allow either absolute `/uploads/...` or `/api/mesh/files/:filename`
+      let absPath: string | null = null;
+      if (meshUrl.startsWith("/uploads/")) {
+        const relative = meshUrl.replace(/^\/uploads[\\\/]?/, "");
+        absPath = path.join(process.cwd(), "uploads", relative);
+      } else if (meshUrl.startsWith("/api/mesh/files/")) {
+        const filename = meshUrl.split("/").pop()!;
+        absPath = path.join(process.cwd(), "uploads", filename);
+      } else {
+        return res.status(400).json({ error: "Unsupported meshUrl format" });
+      }
+
+      if (!fs.existsSync(absPath)) {
+        return res.status(404).json({ error: "Mesh file not found" });
+      }
+
+      const result = await meshProcessor.processObjFile(absPath, coalType);
+
+      res.json({
+        meshUrl,
+        coalType,
+        ...result,
+      });
+    } catch (error) {
+      console.error("Error processing mesh by url:", error);
+      res.status(500).json({ error: "Failed to process mesh by url" });
+    }
+  });
+
   // Process mesh file
   app.post("/api/mesh/process/:fileId", async (req, res) => {
     try {
@@ -908,6 +945,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Status polling endpoint for /api/reconstruct/:jobId (used by 3DReconstruction.tsx)
+  app.get("/api/reconstruct/:jobId", async (req, res) => {
+    try {
+      const { jobId } = req.params;
+
+      // Prevent browser caching — status changes frequently
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+
+      const job = await storage.getPhotogrammetryJob(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+
+      // Get reconstruction state for artifact URLs
+      const state = await storage.getProjectReconstructionState(job.projectId);
+
+      res.json({
+        job: {
+          id: job.id,
+          projectId: job.projectId,
+          status: job.status,
+          attempt: job.attempt,
+          progress: state.progress ?? null,
+          currentStep: state.currentStep ?? null,
+          queuedAt: job.queuedAt.toISOString(),
+          startedAt: job.startedAt?.toISOString() ?? null,
+          finishedAt: job.finishedAt?.toISOString() ?? null,
+          engine: job.engine ?? null,
+          metrics: job.metrics ?? null,
+          logs: job.logs ?? null,
+          artifacts: state.artifacts ?? null,
+          failureReason: job.failure ?? null,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching job status:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
   // 3D Reconstruction from images
   app.post("/api/reconstruct", photoUpload.array("images", 50), async (req, res) => {
     try {
@@ -918,16 +996,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No images uploaded" });
       }
 
-      if (!projectId) {
-        for (const file of files) cleanupFile(file.path);
-        return res.status(400).json({ message: "Project ID is required" });
+      let effectiveProjectId = projectId as string | undefined;
+      if (!effectiveProjectId) {
+        const created = await storage.createProject({ name: "Untitled", status: "draft" });
+        effectiveProjectId = created.id;
       }
 
-      // Validate project exists
-      const project = await storage.getProject(projectId);
-      if (!project) {
-        for (const file of files) cleanupFile(file.path);
-        return res.status(404).json({ message: "Project not found" });
+      const existingProject = await storage.getProject(effectiveProjectId);
+      if (!existingProject) {
+        const created = await storage.createProject({ name: "Untitled", status: "draft" });
+        effectiveProjectId = created.id;
       }
 
       // Validate file count
@@ -990,7 +1068,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Generate storage key
         const storageKey = MemStorage.buildStorageKey({
-          projectId,
+          projectId: effectiveProjectId!,
           type: "photo",
           filename: file.filename,
           extension: path.extname(file.originalname).slice(1),
@@ -1006,33 +1084,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Add photos to storage
-      const photos = await storage.addProjectPhotos(projectId, photoRecords);
+      const photos = await storage.addProjectPhotos(effectiveProjectId!, photoRecords);
 
-      // Create photogrammetry job
-      const job = await storage.createPhotogrammetryJob({
-        projectId,
-        status: "queued",
-      });
-
-      // Update project reconstruction status
-      await storage.updateProjectReconstruction(projectId, {
-        status: "queued",
-        latestJobId: job.id,
-      });
-
-      // Broadcast reconstruction status change
-      eventBroadcaster.broadcast(projectId, {
-        type: "reconstruction.status_changed",
-        data: { status: "queued", progress: 0 },
-      });
-
-      // Start the reconstruction process
+      // Start the reconstruction process — this creates the job record internally
       const photogrammetryWorker = (await import("./worker")).photogrammetryWorker;
-      await photogrammetryWorker.startPhotogrammetryJob(projectId, photos.map(p => p.id));
+      const jobId = await photogrammetryWorker.startMeshroomJob(
+        effectiveProjectId!,
+        (req.files as Express.Multer.File[]).map(f => f.path)
+      );
 
       res.status(201).json({
-        projectId,
-        jobId: job.id,
+        projectId: effectiveProjectId!,
+        jobId,
         status: "queued",
         imageCount: photos.length,
         message: "3D reconstruction started"

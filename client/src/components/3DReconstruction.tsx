@@ -15,59 +15,88 @@ export default function Reconstruction() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("idle");
+  const [progress, setProgress] = useState<number | null>(null);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<any | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if (!jobId) return;
     let cancelled = false;
+
     const poll = async () => {
       try {
-        const res = await fetch(`/api/reconstruct/${jobId}`);
-        if (!res.ok) return;
+        const res = await fetch(`/api/reconstruct/${jobId}?t=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          // Route returned an error — retry after delay
+          if (!cancelled) setTimeout(poll, 2500);
+          return;
+        }
         const data = await res.json();
         const job = data.job;
-        if (!job) return;
+        if (!job) {
+          if (!cancelled) setTimeout(poll, 2500);
+          return;
+        }
+
         setStatus(job.status || "unknown");
+        // Update progress if available from reconstruction state
+        if (typeof job.progress === "number") setProgress(job.progress);
+        if (job.currentStep) setCurrentStep(job.currentStep);
+
         if (job.status === "succeeded") {
           // Prefer artifact URL if provided
           const meshUrl = job.artifacts?.mesh?.url;
           if (meshUrl) {
             setModelUrl(meshUrl);
+            return; // Job done — stop polling
           } else {
-            // try common fallback locations based on projectId
+            // Fallback: check ODM output locations
             const pid = job.projectId;
             if (pid) {
               const tryUrls = [
+                `/uploads/projects/${pid}/reconstruction/odm_output/odm_texturing/odm_textured_model_geo.obj`,
+                `/uploads/projects/${pid}/reconstruction/odm_textured_model_geo.obj`,
+                `/uploads/projects/${pid}/reconstruction/odm_texturing/odm_textured_model_geo.obj`,
                 `/uploads/projects/${pid}/reconstruction/mesh.obj`,
                 `/uploads/projects/${pid}/reconstruction/model.obj`,
-                `/uploads/projects/${pid}/reconstruction/model.fbx`,
               ];
               for (const u of tryUrls) {
-                // HEAD to check existence
                 try {
                   const r = await fetch(u, { method: "HEAD" });
-                  if (r.ok) {
-                    setModelUrl(u);
-                    break;
+                  if (r.ok) { 
+                    setModelUrl(u); 
+                    return; // Job done — stop polling
                   }
                 } catch {}
               }
+              // If no file found yet but job is succeeded, wait a bit for file system
+              console.log("Job succeeded but mesh file not found yet, retrying...");
             }
           }
-          return;
-        } else if (job.status === "failed") {
-          // stop polling
+          // Keep polling for a bit longer to find the file
+          if (!cancelled) setTimeout(poll, 1000);
           return;
         }
+
+        if (job.status === "failed") {
+          // Job failed — stop polling
+          return;
+        }
+
+        // Still in progress — keep polling
+        if (!cancelled) setTimeout(poll, 2500);
       } catch {
-        // ignore
-      } finally {
+        // Network error — retry
         if (!cancelled) setTimeout(poll, 2500);
       }
     };
+
     poll();
     return () => { cancelled = true; };
   }, [jobId]);
@@ -81,15 +110,24 @@ export default function Reconstruction() {
     for (let i = 0; i < files.length; i++) form.append("images", files[i]);
 
     setStatus("uploading");
+    setValidationWarnings([]);
     const res = await fetch("/api/reconstruct", { method: "POST", body: form });
     if (!res.ok) {
+      const error = await res.json();
       setStatus("error");
+      if (error.warnings) {
+        setValidationWarnings(error.warnings);
+      }
+      alert(error.error || "Failed to start reconstruction");
       return;
     }
     const body = await res.json();
     setJobId(body.jobId || null);
     setProjectId(body.projectId || pid);
     setStatus("queued");
+    if (body.validation?.warnings) {
+      setValidationWarnings(body.validation.warnings);
+    }
   };
 
   const onAnalyze = async () => {
@@ -113,11 +151,8 @@ export default function Reconstruction() {
           type="file"
           accept="image/*"
           multiple
-          // Allow folder selection in supporting browsers
-          // @ts-expect-error non-standard attribute
-          webkitdirectory
-          // @ts-expect-error non-standard attribute
-          directory
+          webkitdirectory=""
+          directory=""
           onChange={(e) => setFiles(e.target.files)}
         />
         <div style={{ marginTop: 12 }}>
@@ -125,8 +160,25 @@ export default function Reconstruction() {
         </div>
         <div style={{ marginTop: 12 }}>
           <div>Status: {status}</div>
+          {progress !== null && status !== "succeeded" && status !== "failed" && (
+            <div>Progress: {progress}%</div>
+          )}
+          {currentStep && status !== "succeeded" && status !== "failed" && (
+            <div>Step: {currentStep.replace(/_/g, " ")}</div>
+          )}
           <div>Job: {jobId || "-"}</div>
           <div>Project: {projectId || "-"}</div>
+          {validationWarnings.length > 0 && (
+            <div style={{ marginTop: 12, padding: 8, background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 4 }}>
+              <strong>⚠️ Warnings:</strong>
+              <ul style={{ margin: "4px 0", paddingLeft: 20, fontSize: 12 }}>
+                {validationWarnings.slice(0, 5).map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+                {validationWarnings.length > 5 && <li>...and {validationWarnings.length - 5} more</li>}
+              </ul>
+            </div>
+          )}
         </div>
       </form>
 
@@ -139,7 +191,15 @@ export default function Reconstruction() {
             <OrbitControls />
           </Canvas>
         ) : (
-          <div style={{ padding: 20 }}>{status === "idle" ? "Upload images to begin." : `Waiting: ${status}`}</div>
+          <div style={{ padding: 20 }}>
+            {status === "idle" 
+              ? "Upload images to begin." 
+              : status === "succeeded" 
+              ? "Model ready! Loading viewer..." 
+              : status === "failed"
+              ? "Reconstruction failed. Please try again."
+              : `Processing: ${status}${progress !== null ? ` (${progress}%)` : ""}`}
+          </div>
         )}
         {modelUrl && (
           <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #eee" }}>

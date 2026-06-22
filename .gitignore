@@ -1,6 +1,63 @@
-node_modules
-dist
-.DS_Store
-server/public
-vite.config.ts.*
+# ─── Depekndencies ───────────────────────────────────────────────
+node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ─── Build / Dist ────────────────────────────────────────────────
+dist/
+build/
+server/public/
 *.tar.gz
+
+# ─── Secrets / Environment ───────────────────────────────────────
+.env
+# .env.example is intentionally committed (template)
+
+# ─── Uploads / Generated Data ────────────────────────────────────
+# User-uploaded files and 3D reconstruction output should not be in git
+uploads/
+
+# ─── Logs ────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS / Editor ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.swp
+*.swo
+
+# ─── Vite / TypeScript cache ─────────────────────────────────────
+vite.config.ts.*
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# ─── Test cache ──────────────────────────────────────────────────
+.pytest_cache/
+.hypothesis/
+coverage/
+.nyc_output/
+
+# ─── Misc scratch / temp ─────────────────────────────────────────
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+overview
+
+# ─── Kiro IDE ────────────────────────────────────────────────────
+.kiro/
+
+# ─── Python migrations (auto-generated, not manual) ─────────────
+# Keep backend/migrations/ if you want to track schema migrations
+# Uncomment the next line to exclude them:
+# backend/migrations/

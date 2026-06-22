@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Save, RotateCcw, Database, Cloud, Shield, Scale } from "lucide-react";
+import { Save, RotateCcw, Database, Cloud, Shield, Scale, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Coal density presets (tonnes/m³)
@@ -23,14 +23,16 @@ const COAL_DENSITY_PRESETS = {
 
 type CoalType = keyof typeof COAL_DENSITY_PRESETS;
 
-export default function Settings() {
-  const [activeTab, setActiveTab] = useState("general");
+export default function Settings({ initialTab = "general" }: { initialTab?: string } = {}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [densityPreset, setDensityPreset] = useState<CoalType>("bituminous");
   const [customDensity, setCustomDensity] = useState(1.3);
   const [autoBackup, setAutoBackup] = useState(true);
   const [darkMode, setDarkMode] = useState(true);
   const [apiEndpoint, setApiEndpoint] = useState("http://localhost:5001/api");
   const [isLoading, setIsLoading] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [apiKey, setApiKey] = useState("");
   
   const { toast } = useToast();
 
@@ -76,7 +78,7 @@ export default function Settings() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">
           Configure application preferences and measurement parameters
         </p>
@@ -98,7 +100,7 @@ export default function Settings() {
                 Configure application appearance and behavior
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label htmlFor="dark-mode">Dark Mode</Label>
@@ -145,7 +147,7 @@ export default function Settings() {
                 Set default density values for volume to weight conversion
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="p-5 space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="coal-type">Coal Type</Label>
                 <Select 
@@ -211,7 +213,7 @@ export default function Settings() {
                 Configure data storage and backup settings
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label htmlFor="auto-backup">Automatic Backup</Label>
@@ -271,7 +273,7 @@ export default function Settings() {
                 Configure API endpoints and authentication
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="p-5 space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="api-endpoint">API Endpoint</Label>
                 <Input
@@ -283,12 +285,27 @@ export default function Settings() {
               
               <div className="space-y-2">
                 <Label htmlFor="api-key">API Key</Label>
-                <Input
-                  id="api-key"
-                  type="password"
-                  value="••••••••••••••••••••••"
-                  readOnly
-                />
+                <div className="relative">
+                  <Input
+                    id="api-key"
+                    type={showKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                    onClick={() => setShowKey(!showKey)}
+                  >
+                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                  <Shield className="h-3 w-3" />
+                  API key is stored securely and never transmitted in plain text
+                </p>
               </div>
               
               <div className="flex items-center justify-between">

@@ -122,7 +122,7 @@ export default function Analysis3D() {
         </Button>
         <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold">3D Mesh Analysis</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">3D Mesh Analysis</h1>
             <p className="text-muted-foreground mt-1">
               Project: <span className="font-medium">{project.name}</span>
             </p>
@@ -186,7 +186,7 @@ export default function Analysis3D() {
                   <Ruler className="h-4 w-4" />
                   Length
                 </Label>
-                <p className="text-3xl font-bold">{project.length?.toFixed(2) || 'N/A'}</p>
+                <p className="text-3xl font-bold">{project.length !== null && project.length !== undefined ? project.length.toLocaleString(undefined, { maximumFractionDigits: 4 }) : 'N/A'}</p>
                 <p className="text-xs text-muted-foreground">meters</p>
               </div>
               <div className="space-y-1">
@@ -194,7 +194,7 @@ export default function Analysis3D() {
                   <Ruler className="h-4 w-4" />
                   Width
                 </Label>
-                <p className="text-3xl font-bold">{project.width?.toFixed(2) || 'N/A'}</p>
+                <p className="text-3xl font-bold">{project.width !== null && project.width !== undefined ? project.width.toLocaleString(undefined, { maximumFractionDigits: 4 }) : 'N/A'}</p>
                 <p className="text-xs text-muted-foreground">meters</p>
               </div>
               <div className="space-y-1">
@@ -202,7 +202,7 @@ export default function Analysis3D() {
                   <Ruler className="h-4 w-4" />
                   Height
                 </Label>
-                <p className="text-3xl font-bold">{project.height?.toFixed(2) || 'N/A'}</p>
+                <p className="text-3xl font-bold">{project.height !== null && project.height !== undefined ? project.height.toLocaleString(undefined, { maximumFractionDigits: 4 }) : 'N/A'}</p>
                 <p className="text-xs text-muted-foreground">meters</p>
               </div>
               <div className="space-y-1">
@@ -210,7 +210,7 @@ export default function Analysis3D() {
                   <BoxIcon className="h-4 w-4" />
                   Volume
                 </Label>
-                <p className="text-3xl font-bold">{project.volume?.toFixed(2) || 'N/A'}</p>
+                <p className="text-3xl font-bold">{typeof project.volume === 'number' ? (project.volume < 1 ? project.volume.toLocaleString(undefined, { maximumFractionDigits: 6 }) : project.volume.toLocaleString(undefined, { maximumFractionDigits: 3 })) : 'N/A'}</p>
                 <p className="text-xs text-muted-foreground">cubic meters</p>
               </div>
             </div>

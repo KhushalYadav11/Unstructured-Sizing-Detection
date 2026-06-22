@@ -183,7 +183,7 @@ export function MeshProcessor() {
             Upload your .obj, .ply, or .stl file to automatically calculate volume and weight
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-5 space-y-4">
           {/* File Upload */}
           <div className="space-y-2">
             <Label htmlFor="mesh-file">3D Model File</Label>
@@ -278,7 +278,7 @@ export function MeshProcessor() {
               Analysis completed for {result.fileName}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="p-5 space-y-6">
             {/* Key Metrics */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card>

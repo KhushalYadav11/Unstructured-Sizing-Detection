@@ -3,7 +3,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, FolderOpen } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
 import { getProjects, getProjectStats } from "@/lib/api";
@@ -40,7 +41,7 @@ export default function Projects() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Projects</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
           <p className="text-muted-foreground">
             Manage all coal pile assessment projects
           </p>
@@ -83,11 +84,20 @@ export default function Projects() {
           })}
         </div>
       ) : (
-        <div className="text-center py-12">
-          <p className="text-muted-foreground">
-            {searchQuery ? "No projects found matching your search." : "No projects yet. Create one to get started!"}
-          </p>
-        </div>
+        searchQuery ? (
+          <EmptyState
+            icon={Search}
+            title="No projects found"
+            description="Try a different search term"
+          />
+        ) : (
+          <EmptyState
+            icon={FolderOpen}
+            title="No projects yet"
+            description="Create your first project to get started"
+            action={{ label: "Create Project", onClick: () => setShowCreateDialog(true) }}
+          />
+        )
       )}
 
       <CreateProjectDialog

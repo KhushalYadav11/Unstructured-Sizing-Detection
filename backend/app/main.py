@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from app.routers import auth, jobs, models, reports, dashboard
+from app.routers.optimization import router as optimization_router, performance_router
 from app.db import Base, engine
 
 app = FastAPI()
@@ -18,3 +19,5 @@ app.include_router(jobs.router)
 app.include_router(models.router)
 app.include_router(reports.router)
 app.include_router(dashboard.router)
+app.include_router(optimization_router)
+app.include_router(performance_router)

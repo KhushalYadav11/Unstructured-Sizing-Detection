@@ -32,7 +32,7 @@ export function CoalTypeSelector({ value, onChange }: CoalTypeSelectorProps) {
           Coal Type
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-5 space-y-4">
         <div className="space-y-2">
           <Label htmlFor="coal-type">Select Type</Label>
           <Select value={value} onValueChange={onChange}>

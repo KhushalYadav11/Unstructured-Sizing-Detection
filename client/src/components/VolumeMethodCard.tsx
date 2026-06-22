@@ -50,7 +50,7 @@ export function VolumeMethodCard({
           Volume Calculation Method
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-5 space-y-4">
         <RadioGroup value={value} onValueChange={onChange}>
           {VOLUME_METHODS.map((method) => (
             <div

@@ -97,3 +97,31 @@ export async function saveMeasurement(measurementId: string, projectId: string):
 
   return response.json();
 }
+
+/**
+ * Process a mesh that is already accessible by URL under `/uploads` or `/api/mesh/files/:id`.
+ */
+export async function processMeshByUrl(meshUrl: string, coalType?: string): Promise<{
+  meshUrl: string;
+  coalType: string;
+  volume: number;
+  weight: number;
+  vertices: number;
+  faces: number;
+  surfaceArea: number;
+  boundingBox: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } };
+  dimensions: { length: number; width: number; height: number };
+}> {
+  const response = await fetch(`${API_BASE}/mesh/process-by-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ meshUrl, coalType }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to analyze mesh');
+  }
+
+  return response.json();
+}

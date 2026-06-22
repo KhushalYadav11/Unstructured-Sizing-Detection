@@ -13,6 +13,7 @@ import {
   scaleObjectToUnit,
   centerObject,
   computeModelMetrics,
+  computeCoalPileMetrics,
   type ModelMetrics,
   type Unit,
 } from "@/lib/three-utils";
@@ -58,6 +59,7 @@ export function ThreeDViewer({
     setCalculatedVolume,
     setMeasurementPoints,
     addMeasurementPoint,
+    volumeCalculationMode,
   } = useViewerStore();
   const [isRotating, setIsRotating] = useState(false);
   const [hasModel, setHasModel] = useState(false);
@@ -139,15 +141,46 @@ export function ThreeDViewer({
   }, []);
 
   useEffect(() => {
-    if (measurementPoints.length > 3) {
+    if (volumeCalculationMode && measurementPoints.length > 3) {
       const volume = calculateVolume(measurementPoints);
       setCalculatedVolume(volume);
+    } else if (!volumeCalculationMode) {
+      setCalculatedVolume(null);
     }
-  }, [measurementPoints, calculateVolume, setCalculatedVolume]);
+  }, [volumeCalculationMode, measurementPoints, calculateVolume, setCalculatedVolume]);
 
   useEffect(() => {
     updateGrid();
   }, [showGrid, gridSize, gridDivisions, updateGrid]);
+
+  // High-accuracy coal pile volume using mesh raycasting above fitted plane
+  useEffect(() => {
+    if (!volumeCalculationMode) return;
+    const { modelRoot } = sceneRef.current;
+    if (!modelRoot) return;
+    // Compute asynchronously to avoid UI hitch
+    setTimeout(() => {
+      try {
+        // Adapt grid resolution to pile size for accuracy and performance
+        const bbox = new THREE.Box3().setFromObject(modelRoot);
+        const sizeVec = bbox.getSize(new THREE.Vector3());
+        const minDim = Math.max(0.001, Math.min(sizeVec.x, sizeVec.y, sizeVec.z));
+        const targetCells = 200; // ~200 cells across smallest dimension
+        const adaptiveRes = Math.min(0.25, Math.max(0.05, minDim / targetCells));
+        const pile = computeCoalPileMetrics(modelRoot, { gridResolution: adaptiveRes, bottomPercent: 0.1 });
+        setCalculatedVolume(pile.volume);
+        const size = sizeVec;
+        setMetrics({
+          boundingBox: { min: bbox.min.clone(), max: bbox.max.clone(), size },
+          dimensions: pile.dimensions,
+          volume: pile.volume,
+          triangles: metrics?.triangles ?? 0,
+        });
+      } catch (e) {
+        console.error("Coal pile metrics calculation failed:", e);
+      }
+    }, 0);
+  }, [volumeCalculationMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;

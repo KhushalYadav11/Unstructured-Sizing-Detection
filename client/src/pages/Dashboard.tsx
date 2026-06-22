@@ -4,7 +4,8 @@ import { MetricCard } from "@/components/MetricCard";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { TrendingUp, Scale, FileCheck, Plus, Box } from "lucide-react";
+import { TrendingUp, Scale, FileCheck, Plus, Box, FolderOpen } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useLocation } from "wouter";
 import { getProjects, getProjectStats, getTodayCount, getAnalyticsOverview } from "@/lib/api";
@@ -40,7 +41,7 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground">
             Coal volume and weight estimation overview
           </p>
@@ -78,33 +79,25 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Quick Access to 3D Analysis */}
-      <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border-blue-200 dark:border-blue-800">
+      {/* Quick Actions */}
+      <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Box className="h-5 w-5 text-blue-600" />
-            3D Mesh Analysis
-          </CardTitle>
-          <CardDescription>
-            Upload your .obj files from Meshroom for automated volume and weight calculation
-          </CardDescription>
+          <CardTitle className="text-base font-semibold">Quick Actions</CardTitle>
+          <CardDescription>Jump to 3D tools and reconstruction</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex gap-4">
-            <Button
-              onClick={() => setLocation("/mesh-analysis")}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
+        <CardContent className="p-5">
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" onClick={() => setLocation("/mesh-analysis")}>
               <Box className="h-4 w-4 mr-2" />
               Start 3D Analysis
             </Button>
-
-            <Button
-              onClick={() => setLocation("/3d-view")}
-              className="bg-indigo-600 hover:bg-indigo-700"
-            >
+            <Button variant="outline" onClick={() => setLocation("/3d-view")}>
               <Box className="h-4 w-4 mr-2" />
               3D Model Viewer
+            </Button>
+            <Button variant="outline" onClick={() => setLocation("/reconstruct")}>
+              <Box className="h-4 w-4 mr-2" />
+              Start Reconstruction
             </Button>
           </div>
         </CardContent>
@@ -133,13 +126,12 @@ export default function Dashboard() {
             })}
           </div>
         ) : (
-          <div className="text-center py-12 border rounded-lg">
-            <p className="text-muted-foreground mb-4">No projects yet</p>
-            <Button onClick={() => setShowCreateDialog(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Your First Project
-            </Button>
-          </div>
+          <EmptyState
+            icon={FolderOpen}
+            title="No projects yet"
+            description="Create your first project to get started"
+            action={{ label: "Create Project", onClick: () => setShowCreateDialog(true) }}
+          />
         )}
       </div>
 
