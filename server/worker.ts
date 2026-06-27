@@ -18,7 +18,7 @@ const POLL_INTERVAL_MS = 3000;
 // Reference model directory — overwrite final output with this when user answers Y
 const REFERENCE_MODEL_DIR =
   process.env.REFERENCE_MODEL_DIR ||
-  "C:\\Users\\KHUSHAL\\Downloads\\ImageToStl.com_8_5_2026";
+  "C:\\Users\\KHUSHAL\\Downloads\\27_6_2026";
 
 class PhotogrammetryWorker {
   // Tracks which jobs should have their output replaced with the reference model
@@ -441,27 +441,39 @@ class PhotogrammetryWorker {
       .filter(f => textureExts.has(path.extname(f).toLowerCase()))
       .map(f => ({ name: f, url: `/uploads/projects/${projectId}/reconstruction/${f}` }));
 
-    if (!objFile) {
-      throw new Error(`No .obj file found in reference directory: ${refDir}`);
+    // Must have at least a GLB or OBJ
+    if (!glbFile && !objFile) {
+      throw new Error(`No .glb or .obj file found in reference directory: ${refDir}`);
     }
 
-    const objAbsPath = path.join(reconDir, objFile);
+    // Build updated artifacts — GLB is preferred as primary if present
+    const newArtifacts: any = {};
 
-    // Build updated artifacts pointing at the reference files
-    const newArtifacts: any = {
-      mesh: {
-        format: "obj",
-        url: `/uploads/projects/${projectId}/reconstruction/${objFile}`,
-        sizeBytes: fs.statSync(objAbsPath).size,
-      },
-    };
     if (glbFile) {
       const glbAbsPath = path.join(reconDir, glbFile);
+      // GLB is the primary mesh — viewer loads this first (textures embedded)
       newArtifacts.meshGlb = {
         url: `/uploads/projects/${projectId}/reconstruction/${glbFile}`,
         sizeBytes: fs.existsSync(glbAbsPath) ? fs.statSync(glbAbsPath).size : undefined,
       };
+      // Also populate mesh.url so existing code paths that read artifacts.mesh still work
+      newArtifacts.mesh = {
+        format: "glb",
+        url: `/uploads/projects/${projectId}/reconstruction/${glbFile}`,
+        sizeBytes: fs.existsSync(glbAbsPath) ? fs.statSync(glbAbsPath).size : undefined,
+      };
     }
+
+    if (objFile) {
+      const objAbsPath = path.join(reconDir, objFile);
+      // OBJ as secondary (fallback for mesh processor)
+      newArtifacts.mesh = {
+        format: "obj",
+        url: `/uploads/projects/${projectId}/reconstruction/${objFile}`,
+        sizeBytes: fs.statSync(objAbsPath).size,
+      };
+    }
+
     if (textures.length > 0) newArtifacts.textures = textures;
 
     // Update storage so the viewer picks up the reference model URL
@@ -472,27 +484,39 @@ class PhotogrammetryWorker {
       artifacts: newArtifacts,
     });
 
-    // Recompute dimensions from the reference OBJ
-    try {
-      const meshResult = await meshProcessor.processObjFile(objAbsPath, "bituminous");
+    // Recompute dimensions from OBJ if available; GLB-only skips this
+    // (the ODM-computed dimensions from the original run remain in the project)
+    if (objFile) {
+      const objAbsPath = path.join(reconDir, objFile);
+      try {
+        const meshResult = await meshProcessor.processObjFile(objAbsPath, "bituminous");
+        await storage.updateProject(projectId, {
+          status: "completed",
+          length: meshResult.dimensions.length,
+          width: meshResult.dimensions.width,
+          height: meshResult.dimensions.height,
+          volume: meshResult.volume,
+          weight: meshResult.weight,
+          meshFileName: objFile,
+          meshFilePath: objAbsPath,
+        });
+        console.log(
+          `[worker] Reference model applied — ` +
+          `L=${meshResult.dimensions.length.toFixed(2)}m ` +
+          `W=${meshResult.dimensions.width.toFixed(2)}m ` +
+          `H=${meshResult.dimensions.height.toFixed(2)}m`
+        );
+      } catch (e) {
+        console.warn("[worker] Could not compute reference model dimensions:", e);
+      }
+    } else {
+      // GLB-only: mark project completed, keep ODM-computed dimensions
       await storage.updateProject(projectId, {
         status: "completed",
-        length: meshResult.dimensions.length,
-        width: meshResult.dimensions.width,
-        height: meshResult.dimensions.height,
-        volume: meshResult.volume,
-        weight: meshResult.weight,
-        meshFileName: objFile,
-        meshFilePath: objAbsPath,
+        meshFileName: glbFile,
+        meshFilePath: path.join(reconDir, glbFile!),
       });
-      console.log(
-        `[worker] Reference model applied — ` +
-        `L=${meshResult.dimensions.length.toFixed(2)}m ` +
-        `W=${meshResult.dimensions.width.toFixed(2)}m ` +
-        `H=${meshResult.dimensions.height.toFixed(2)}m`
-      );
-    } catch (e) {
-      console.warn("[worker] Could not compute reference model dimensions:", e);
+      console.log(`[worker] GLB-only reference model applied for project ${projectId}`);
     }
 
     // Broadcast so the frontend polling picks up the new artifacts immediately
@@ -500,7 +524,7 @@ class PhotogrammetryWorker {
       type: "reconstruction.ready",
       data: {
         artifacts: {
-          meshUrl: newArtifacts.mesh.url,
+          meshUrl: newArtifacts.meshGlb?.url ?? newArtifacts.mesh?.url,
           textures: textures.map((t: any) => t.url),
         },
       },
@@ -557,7 +581,7 @@ class PhotogrammetryWorker {
     //     reference model once ODM completes.
     // N → run ODM and show the actual ODM output.
     // Auto-N after 30 s so unattended servers don't hang.
-    const refObjPath = path.join(REFERENCE_MODEL_DIR, "8_5_2026.obj");
+    const refObjPath = path.join(REFERENCE_MODEL_DIR, "27_6_2026.glb");
     const refExists = fs.existsSync(refObjPath);
 
     const useReference = await new Promise<boolean>((resolve) => {

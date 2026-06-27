@@ -298,7 +298,7 @@ export function MeshProcessor() {
                   <div className="flex items-center gap-2">
                     <Weight className="h-5 w-5 text-green-500" />
                     <div>
-                      <p className="text-2xl font-bold">{formatNumber(result.weight)} kg</p>
+                      <p className="text-2xl font-bold">{formatNumber((result.weight + 0.2) * 1000)} g</p>
                       <p className="text-sm text-muted-foreground">Estimated Weight</p>
                     </div>
                   </div>

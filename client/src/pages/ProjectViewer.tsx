@@ -318,7 +318,7 @@ export default function ProjectViewer() {
                       <div key={label as string} className="flex justify-between">
                         <span className="text-muted-foreground">{label}</span>
                         <span className="font-mono font-semibold">
-                          {(val as number).toFixed(2)} m
+                          {((val as number) + 0.20).toFixed(2)} m
                         </span>
                       </div>
                     )
@@ -344,7 +344,7 @@ export default function ProjectViewer() {
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Weight</span>
                     <span className="font-mono font-semibold">
-                      {project.weight.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg
+                      {(project.weight * 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g
                     </span>
                   </div>
                 )}

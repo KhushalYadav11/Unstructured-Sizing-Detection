@@ -488,7 +488,7 @@ export default function Reconstruction() {
   const stageName = getStageName(progress);
 
   const weight = analysis
-    ? (analysis.volume * selectedCoal.density).toFixed(1)
+    ? ((analysis.volume * selectedCoal.density + 0.2) * 1000).toFixed(0)
     : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -743,7 +743,7 @@ export default function Reconstruction() {
                     <MetricTile
                       icon={<Weight className="h-3.5 w-3.5" />}
                       label={`Weight (${selectedCoal.label})`}
-                      value={`${Number(weight).toLocaleString()} kg`}
+                      value={`${Number(weight).toLocaleString()} g`}
                       large
                     />
                     <div className="flex gap-2 text-xs text-muted-foreground pt-1 border-t">

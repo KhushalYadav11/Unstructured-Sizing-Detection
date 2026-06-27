@@ -153,7 +153,7 @@ export function ProjectCard({
               <div>
                 <div className="text-xs text-muted-foreground">Weight</div>
                 <div className="font-mono font-semibold" data-testid="text-project-weight">
-                  {weight.toLocaleString(undefined, { maximumFractionDigits: 0 })} g
+                  {(weight * 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })} g
                 </div>
               </div>
             )}

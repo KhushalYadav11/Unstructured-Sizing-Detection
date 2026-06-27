@@ -225,7 +225,8 @@ export class MeshProcessor {
       const volume = useDsm ? dsmResult.volume : classicVolume;
 
       const coalConfig = COAL_DENSITIES[coalType] || COAL_DENSITIES.bituminous;
-      const weight = volume * coalConfig.density;
+      // weight in kg + 0.2 kg (200 g) offset applied globally
+      const weight = volume * coalConfig.density + 0.2;
 
       return {
         volume,

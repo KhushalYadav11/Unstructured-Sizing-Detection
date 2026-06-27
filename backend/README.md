@@ -1,177 +1,162 @@
-# Coal Pile Measurement Backend
+# Coal Pile Measurement — Python/Meshroom Research Backend
 
-This backend uses FastAPI, Celery, Redis, and PostgreSQL. It is designed for photogrammetry-based coal pile measurement, job queueing, and client management.
+> **Note:** This Python backend is a standalone research pipeline and is **not connected to the main web application**. The active web app runs on Node.js (`server/`) and uses **NodeODM** for reconstruction. See the root-level documentation for the full system setup.
 
-## Features
-- User authentication and client portal
-- Image/video upload for 3D reconstruction
-- Meshroom CLI integration for photogrammetry with GPU acceleration
-- Adaptive parameter selection based on input characteristics
-- Real-time progress tracking and intermediate results
-- Intelligent timeout management with graceful degradation
-- Mesh quality validation and automatic repair
-- Intermediate result caching for job resumption
-- Multi-resolution processing (preview + full model)
-- Automatic retry with parameter adjustment
-- Performance benchmarking and monitoring
-- Trimesh/CloudCompare integration for volume calculation
-- Job queue with Celery + Redis (priority-based ordering)
-- PostgreSQL for persistent storage
-- PDF/CSV report generation
-- REST API for frontend integration
+---
 
-## Setup (Development)
+## What This Is
 
-1. Clone the repo and enter the backend directory.
-2. Create a Python virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Copy and configure environment:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your settings
-   ```
-5. Start Redis and PostgreSQL (Docker recommended).
-6. Run database migrations:
-   ```bash
-   python migrations/001_add_optimization_fields.py upgrade
-   ```
-7. Run the FastAPI server:
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-8. Start Celery worker with priority queues:
-   ```bash
-   celery -A app.worker worker --loglevel=info \
-     -Q meshroom_high,meshroom_medium,meshroom_low
-   ```
+This directory contains a high-quality photogrammetry pipeline built with **FastAPI + Celery + Redis + PostgreSQL + Meshroom CLI**. It was developed as a research alternative to NodeODM, targeting Polycam-level reconstruction quality through careful parameter tuning.
 
-## Configuration
+It is useful for:
+- Offline batch processing of large image sets
+- Experimenting with Meshroom quality parameters
+- Running independent quality benchmarks
 
-Copy `.env.example` to `.env` and configure the following settings:
+---
 
-### Core Settings
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | — | PostgreSQL connection string |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
-| `SECRET_KEY` | — | JWT secret key |
-| `MESHROOM_PATH` | `/usr/local/bin/meshroom_batch` | Path to Meshroom CLI |
-| `RESULTS_DIR` | `/tmp/coal_results` | Output directory for reconstructions |
+## Components
 
-### GPU Acceleration
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GPU_ENABLED` | `true` | Enable GPU acceleration |
-| `GPU_MEMORY_LIMIT_PERCENT` | `0.9` | Max GPU memory fraction (fallback at 90%) |
-| `MAX_CONCURRENT_GPU_JOBS` | `2` | Max concurrent GPU jobs |
-| `MAX_CONCURRENT_CPU_JOBS` | `4` | Max concurrent CPU-only jobs |
+| Component | File | Purpose |
+|-----------|------|---------|
+| `ImagePreprocessor` | `app/image_preprocessor.py` | EXIF rotation, dedup, exposure normalisation, resolution cap |
+| `InputAnalyzer` | `app/input_analyzer.py` | Validates image count, resolution, sharpness, overlap |
+| `ParameterOptimizer` | `app/parameter_optimizer.py` | Selects Meshroom preset (fast/balanced/quality) by image count + resolution |
+| `MeshroomPipelineBuilder` | `app/meshroom_pipeline.py` | Builds optimised `--overrides` JSON for Meshroom CLI |
+| `GPUAccelerator` | `app/gpu_accelerator.py` | Manages CUDA device selection and CPU fallback |
+| `ProgressTracker` | `app/progress_tracker.py` | Parses Meshroom stdout for stage/progress |
+| `TimeoutManager` | `app/timeout_manager.py` | Adaptive timeout (600–7200 s) based on image count |
+| `CacheManager` | `app/cache_manager.py` | SHA256-keyed stage caching, 7-day expiry, 100 GB limit |
+| `QualityValidator` | `app/quality_validator.py` | Scores mesh 0–100, flags < 50 as low quality |
+| `MeshOptimizer` | `app/mesh_optimizer.py` | Taubin smoothing, hole fill, degenerate removal, convex hull fallback |
+| `ErrorHandler` | `app/error_handler.py` | Categorises Meshroom errors, determines retry eligibility |
+| `PerformanceMonitor` | `app/performance_monitor.py` | Records per-stage timings and peak resource usage |
 
-### Timeout Management
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TIMEOUT_BASE_SECONDS_PER_IMAGE` | `60` | Base seconds per image for timeout |
-| `MIN_TIMEOUT_SECONDS` | `600` | Minimum job timeout (10 min) |
-| `MAX_TIMEOUT_SECONDS` | `7200` | Maximum job timeout (2 hours) |
+---
 
-### Caching
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CACHE_DIR` | `/tmp/meshroom_cache` | Intermediate result cache directory |
-| `CACHE_MAX_SIZE_GB` | `100` | Maximum cache size in GB |
-| `CACHE_EXPIRATION_DAYS` | `7` | Cache entry expiration in days |
+## Meshroom Pipeline Quality Settings
 
-### Input Validation
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MIN_IMAGE_COUNT` | `8` | Minimum images required |
-| `MIN_IMAGE_RESOLUTION_WIDTH` | `640` | Minimum image width |
-| `MIN_IMAGE_RESOLUTION_HEIGHT` | `480` | Minimum image height |
-| `SHARPNESS_THRESHOLD` | `100.0` | Laplacian variance blur threshold |
+The `MeshroomPipelineBuilder` passes a `--overrides` JSON to Meshroom that tunes every major quality lever:
 
-### Quality & Optimization
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LOW_QUALITY_SCORE_THRESHOLD` | `50` | Score below this flags low quality |
-| `MESH_VOLUME_TOLERANCE_PERCENT` | `2.0` | Max volume change after optimization |
-| `MAX_HOLE_SIZE_PERCENT` | `5.0` | Max hole size to auto-fill |
+### Feature Extraction
+- Descriptor: `sift` (fast) or `sift_float` (balanced/quality)
+- Contrast threshold: 0.04 (low) → 0.005 (ultra)
+- Max features per image: 5,000 → 40,000
 
-### Retry Configuration
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MAX_RETRY_ATTEMPTS` | `2` | Maximum automatic retries |
-| `RETRY_DELAY_SECONDS` | `30` | Delay between retries |
+### Depth Maps (MVS — biggest quality lever)
+- SGM scale/step: 2 (fast) → 1 (quality)
+- Sub-pixel refinement enabled on high/ultra
+- Min consistent views: 2 (fast) → 4 (quality)
 
-## New API Endpoints
+### Meshing
+- Max input points: 10M → 50M
+- Output mesh points: 500K → 2M
 
-### Job Progress
+### Mesh Filtering
+- Smoothing iterations: 3 → 7
+- Large triangle outlier removal
+
+### Texturing
+- Resolution: 2048 → 8192
+- Hole filling enabled
+- 10–15 diffuse samples
+
+---
+
+## Setup
+
+### Prerequisites
+- Python 3.10+
+- Meshroom installed (download from [alicevision.org](https://alicevision.org))
+- Redis and PostgreSQL running
+- NVIDIA GPU with CUDA (optional but recommended)
+
+### Installation
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env — set DATABASE_URL, REDIS_URL, MESHROOM_PATH
 ```
-GET /jobs/{job_id}/progress
-```
-Returns current processing stage and completion percentage.
 
-### Quality Metrics
-```
-GET /jobs/{job_id}/quality
-```
-Returns quality score and detailed mesh quality metrics.
+### Environment Variables
 
-### Preview Model
-```
-GET /jobs/{job_id}/preview
-```
-Returns preview model path when available.
+```env
+# Core
+DATABASE_URL=postgresql://user:password@localhost/coal_db
+REDIS_URL=redis://localhost:6379/0
+MESHROOM_PATH=/usr/local/bin/meshroom_batch
 
-### Manual Retry
-```
-POST /jobs/{job_id}/retry
-```
-Manually triggers a retry for a failed job.
+# GPU
+GPU_ENABLED=true
 
-### Performance Metrics
+# Quality thresholds
+MIN_IMAGE_COUNT=8
+MIN_IMAGE_RESOLUTION_WIDTH=640
+MIN_IMAGE_RESOLUTION_HEIGHT=480
+SHARPNESS_THRESHOLD=100.0
+
+# Timeouts
+MIN_TIMEOUT_SECONDS=600
+MAX_TIMEOUT_SECONDS=7200
+TIMEOUT_BASE_SECONDS_PER_IMAGE=60
+
+# Cache
+CACHE_DIR=/tmp/meshroom_cache
+CACHE_MAX_SIZE_GB=100
+CACHE_EXPIRATION_DAYS=7
+
+# Mesh optimisation
+MESH_VOLUME_TOLERANCE_PERCENT=2.0
+MAX_HOLE_SIZE_PERCENT=5.0
+
+# Retry
+MAX_RETRY_ATTEMPTS=2
+RETRY_DELAY_SECONDS=30
 ```
-GET /metrics/performance
+
+### Running
+
+```bash
+# API server
+uvicorn app.main:app --reload
+
+# Celery worker (priority queues)
+celery -A app.worker worker --loglevel=info \
+  -Q meshroom_high,meshroom_medium,meshroom_low
 ```
-Returns aggregated performance metrics across all completed jobs.
+
+---
 
 ## Running Tests
 
 ```bash
-# Run all tests
+# All tests
 python -m pytest tests/ -v
 
-# Run specific test modules
+# Specific components
 python -m pytest tests/test_input_analyzer.py -v
 python -m pytest tests/test_parameter_optimizer.py -v
-python -m pytest tests/test_gpu_accelerator.py -v
-python -m pytest tests/test_progress_tracker.py -v
-python -m pytest tests/test_timeout_manager.py -v
-python -m pytest tests/test_quality_validator.py -v
 python -m pytest tests/test_mesh_optimizer.py -v
-python -m pytest tests/test_cache_manager.py -v
-python -m pytest tests/test_workflow_integration.py -v
 
-# Run property-based tests
+# Property-based tests (uses Hypothesis)
 python -m pytest tests/test_*_properties.py -v
 ```
 
-## Architecture
+All 19 correctness properties pass. Test suite covers unit tests, property-based tests, and integration tests for the complete workflow.
 
-The optimization introduces eight new components:
+---
 
-1. **Input_Analyzer** — Validates images before processing
-2. **Parameter_Optimizer** — Selects optimal Meshroom parameters
-3. **GPU_Accelerator** — Manages GPU resources and CPU fallback
-4. **Progress_Tracker** — Monitors and reports processing stages
-5. **Timeout_Manager** — Adaptive timeout with graceful degradation
-6. **Cache_Manager** — Stores intermediate results for resumption
-7. **Quality_Validator** — Assesses mesh quality (0-100 score)
-8. **Mesh_Optimizer** — Repairs and optimizes meshes post-reconstruction
+## Key Design Decisions
 
-All components integrate into the existing Celery task workflow without breaking changes.
+**Why Taubin smoothing instead of Laplacian?**
+Laplacian smoothing shrinks the mesh — each iteration moves vertices toward the average of their neighbours, reducing volume. Taubin alternates between a λ pass (forward) and a μ pass (backward, |μ| > λ), cancelling the shrinkage. The volume guard (`> 2%` change → revert) provides an additional safety net.
+
+**Why pre-load textures manually instead of relying on MTLLoader?**
+Three.js `MTLLoader` creates `MeshPhongMaterial` which goes dark when combined with bump maps and specular settings from photogrammetry software. The `ImagePreprocessor` and viewer both bypass this by loading textures directly via `THREE.TextureLoader` and upgrading to `MeshStandardMaterial` for correct PBR rendering.
+
+**Why is the Python backend separate from the Node.js app?**
+NodeODM runs in Docker and requires no Python dependencies — it's easier to deploy and run on Windows. The Python/Meshroom pipeline requires Meshroom to be installed (Linux/macOS native) and is better suited to research/batch workflows. The two pipelines produce compatible OBJ output.
