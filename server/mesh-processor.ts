@@ -1,21 +1,28 @@
 import fs from 'fs';
 import path from 'path';
+import { calculatePileVolume, type DsmVolumeResult } from './dsm-volume.js';
 
 export interface MeshProcessingResult {
-  volume: number; // m³
-  weight: number; // kg
+  volume: number;          // m³ (best estimate)
+  weight: number;          // kg
   vertices: number;
   faces: number;
-  surfaceArea: number; // m²
+  surfaceArea: number;     // m²
   boundingBox: {
     min: { x: number; y: number; z: number };
     max: { x: number; y: number; z: number };
   };
   dimensions: {
-    length: number; // meters
-    width: number; // meters
-    height: number; // meters
+    length: number;
+    width: number;
+    height: number;
   };
+  // Extended accuracy fields
+  volumeMethod: "dsm-ground-subtraction" | "divergence-theorem-fallback";
+  volumeConfidence: "high" | "medium" | "low";
+  groundPlaneZ?: number;
+  pileArea?: number;       // footprint m²
+  maxHeight?: number;      // max height above ground m
 }
 
 export interface CoalDensityConfig {
@@ -181,38 +188,45 @@ export class MeshProcessor {
   }
 
   /**
-   * Process OBJ file and calculate volume and weight
+   * Process OBJ file and calculate volume and weight.
+   * Uses DSM-based ground-subtraction for accuracy on outdoor piles,
+   * falling back to divergence theorem for indoor / pre-clipped meshes.
    */
   async processObjFile(
-    filePath: string, 
-    coalType: string = 'bituminous'
+    filePath: string,
+    coalType: string = 'bituminous',
+    scaleFactor: number = 1.0,  // metres per mesh unit; 1.0 = GPS-referenced or already in metres
   ): Promise<MeshProcessingResult> {
     try {
-      // Parse the OBJ file
+      const content = fs.readFileSync(filePath, 'utf-8');
+
+      // Parse for classic metrics (surface area, bounding box, vertex/face count)
       const { vertices, faces } = this.parseObjFile(filePath);
-      
+
       if (vertices.length === 0 || faces.length === 0) {
         throw new Error('Invalid OBJ file: No vertices or faces found');
       }
-      
-      // Calculate volume
-      const volume = this.calculateVolume(vertices, faces);
-      
-      // Calculate surface area
-      const surfaceArea = this.calculateSurfaceArea(vertices, faces);
-      
-      // Calculate bounding box
-      const boundingBox = this.calculateBoundingBox(vertices);
-      
-      // Extract dimensions
-      const dimensions = this.extractDimensions(boundingBox);
-      
-      // Get coal density
+
+      // Apply scale factor to all vertex coordinates before any calculations
+      const scaledVertices = scaleFactor === 1.0
+        ? vertices
+        : vertices.map(v => [v[0] * scaleFactor, v[1] * scaleFactor, v[2] * scaleFactor]);
+
+      const surfaceArea    = this.calculateSurfaceArea(scaledVertices, faces);
+      const boundingBox    = this.calculateBoundingBox(scaledVertices);
+      const dimensions     = this.extractDimensions(boundingBox);
+
+      // --- Improved volume: DSM ground-subtraction (operates on scaled coords via scaleFactor param) ---
+      const dsmResult: DsmVolumeResult = calculatePileVolume(content, scaleFactor);
+
+      // If the DSM method returned near-zero (degenerate mesh), fall back
+      const classicVolume = this.calculateVolume(scaledVertices, faces);
+      const useDsm = dsmResult.volume > classicVolume * 0.05;
+      const volume = useDsm ? dsmResult.volume : classicVolume;
+
       const coalConfig = COAL_DENSITIES[coalType] || COAL_DENSITIES.bituminous;
-      
-      // Calculate weight (volume in m³ × density in kg/m³)
       const weight = volume * coalConfig.density;
-      
+
       return {
         volume,
         weight,
@@ -220,7 +234,12 @@ export class MeshProcessor {
         faces: faces.length,
         surfaceArea,
         boundingBox,
-        dimensions
+        dimensions,
+        volumeMethod: useDsm ? dsmResult.method : "divergence-theorem-fallback",
+        volumeConfidence: useDsm ? dsmResult.confidence : "medium",
+        groundPlaneZ: dsmResult.groundPlaneZ,
+        pileArea: dsmResult.pileArea,
+        maxHeight: dsmResult.maxHeight,
       };
     } catch (error) {
       throw new Error(`Failed to process OBJ file: ${error instanceof Error ? error.message : 'Unknown error'}`);

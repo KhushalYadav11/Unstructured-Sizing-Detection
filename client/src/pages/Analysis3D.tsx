@@ -3,15 +3,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { 
-  BoxIcon, 
-  Ruler, 
+import { Badge } from "@/components/ui/badge";
+import {
+  BoxIcon,
+  Ruler,
   Loader2,
   ArrowLeft,
   Box,
   FileText,
   CheckCircle2,
-  Download
+  Download,
+  MapPin,
+  ScanLine,
+  Weight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -84,6 +88,22 @@ export default function Analysis3D() {
   const meshUrl = project.meshFilePath 
     ? `/api/mesh/files/${project.meshFilePath.split(/[/\\]/).pop()}`
     : null;
+
+  // Pull GPS from photo EXIF if available
+  const gpsCoords: { lat: number; lng: number } | null = (() => {
+    const photos: any[] = project.photos || [];
+    for (const p of photos) {
+      if (p.exif?.gps?.lat && p.exif?.gps?.lng) {
+        return { lat: p.exif.gps.lat, lng: p.exif.gps.lng };
+      }
+    }
+    return null;
+  })();
+
+  // Reconstruction artifacts
+  const reconArtifacts = project.reconstructionArtifacts as any;
+  const meshArtifactUrl = reconArtifacts?.mesh?.url ?? null;
+  const orthophotoUrl = reconArtifacts?.orthophoto?.url ?? null;
 
   const handleDownloadModel = () => {
     if (meshUrl) {
@@ -232,7 +252,7 @@ export default function Analysis3D() {
               <ul className="text-sm text-muted-foreground space-y-1">
                 <li>• Bounding box analysis for L×W×H</li>
                 <li>• Divergence theorem for volume</li>
-                <li>• {project.meshFileName ? `${(15273).toLocaleString()} vertices analyzed` : 'Mesh analysis'}</li>
+                <li>• {project.meshFileName ? `Mesh geometry analyzed` : 'Mesh analysis'}</li>
               </ul>
             </div>
           </CardContent>
@@ -245,7 +265,10 @@ export default function Analysis3D() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Estimated Weight</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Weight className="h-5 w-5" />
+              Estimated Weight
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {estimatedWeightGrams !== null ? (
@@ -279,6 +302,94 @@ export default function Analysis3D() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Reconstruction preview row */}
+      {(orthophotoUrl || meshArtifactUrl || gpsCoords) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Orthophoto thumbnail */}
+          {orthophotoUrl && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <ScanLine className="h-4 w-4" />
+                  Orthophoto Preview
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <img
+                  src={orthophotoUrl}
+                  alt="Orthophoto"
+                  className="w-full rounded-b-lg object-cover max-h-64"
+                  onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = "none"; }}
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* GPS location map */}
+          {gpsCoords && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <MapPin className="h-4 w-4" />
+                  Capture Location
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="rounded-md overflow-hidden border">
+                  <iframe
+                    title="GPS Location"
+                    width="100%"
+                    height="200"
+                    style={{ border: 0 }}
+                    src={`https://www.openstreetmap.org/export/embed.html?bbox=${gpsCoords.lng - 0.005},${gpsCoords.lat - 0.005},${gpsCoords.lng + 0.005},${gpsCoords.lat + 0.005}&layer=mapnik&marker=${gpsCoords.lat},${gpsCoords.lng}`}
+                    allowFullScreen
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground font-mono flex gap-4">
+                  <span>Lat: {gpsCoords.lat.toFixed(6)}°</span>
+                  <span>Lng: {gpsCoords.lng.toFixed(6)}°</span>
+                </div>
+                <a
+                  href={`https://www.google.com/maps?q=${gpsCoords.lat},${gpsCoords.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <MapPin className="h-3 w-3" /> Open in Google Maps
+                </a>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Mesh artifact download */}
+          {meshArtifactUrl && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Download className="h-4 w-4" />
+                  Reconstruction Exports
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <a href={meshArtifactUrl} download>
+                  <Button variant="outline" size="sm" className="w-full gap-2">
+                    <Download className="h-4 w-4" /> Download OBJ Mesh
+                  </Button>
+                </a>
+                <a href={meshArtifactUrl.replace(/\.obj$/i, ".mtl")} download>
+                  <Button variant="outline" size="sm" className="w-full gap-2">
+                    <Download className="h-4 w-4" /> Download MTL Material
+                  </Button>
+                </a>
+                <Badge variant="secondary" className="text-xs">
+                  Status: {project.reconstructionStatus}
+                </Badge>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }

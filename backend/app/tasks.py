@@ -12,7 +12,10 @@ from app.quality_validator import QualityValidator
 from app.mesh_optimizer import MeshOptimizer
 from app.error_handler import ErrorHandler
 from app.performance_monitor import PerformanceMonitor
+from app.meshroom_pipeline import MeshroomPipelineBuilder
+from app.image_preprocessor import ImagePreprocessor
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -36,8 +39,31 @@ def _monitor_progress(process, tracker: ProgressTracker, timeout_config, cache_m
             break
 
 
+def _collect_stderr(process) -> str:
+    """Drain process stderr into a string (used when stderr is a separate pipe)."""
+    if process.stderr is None:
+        return ""
+    lines = []
+    for line in iter(process.stderr.readline, ""):
+        lines.append(line.rstrip())
+    return "\n".join(lines)
+
+
 def _find_output_mesh(output_dir: str) -> Optional[str]:
-    """Search for the first .obj file in output_dir."""
+    """
+    Search for the best output mesh in output_dir.
+    Prefers the textured/filtered mesh over raw outputs.
+    """
+    # Preferred order: MeshFiltering output > Meshing output > any .obj
+    preferred_dirs = ["MeshFiltering", "Texturing", "Meshing"]
+    for preferred in preferred_dirs:
+        for root, dirs, files in os.walk(output_dir):
+            if preferred.lower() in root.lower():
+                for fname in files:
+                    if fname.endswith(".obj"):
+                        return os.path.join(root, fname)
+
+    # Fallback: first .obj found
     for root, _, files in os.walk(output_dir):
         for fname in files:
             if fname.endswith(".obj"):
@@ -70,8 +96,11 @@ def run_meshroom_job(self, job_id: int, input_path: str):
     quality_validator = QualityValidator()
     mesh_optimizer = MeshOptimizer()
     error_handler = ErrorHandler()
+    pipeline_builder = MeshroomPipelineBuilder()
+    preprocessor = ImagePreprocessor()
 
     params = None
+    preprocessed_dir = None
 
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -79,7 +108,7 @@ def run_meshroom_job(self, job_id: int, input_path: str):
             return {"error": "Job not found"}
 
         # ----------------------------------------------------------------
-        # 1. Input Validation
+        # 1. Input Validation (on original images)
         # ----------------------------------------------------------------
         job.status = "validating"
         job.current_stage = "validation"
@@ -109,9 +138,44 @@ def run_meshroom_job(self, job_id: int, input_path: str):
             return {"error": "Input validation failed", "details": analysis.validation_errors}
 
         # ----------------------------------------------------------------
+        # 1b. Image Preprocessing (EXIF rotation, dedupe, exposure norm)
+        # ----------------------------------------------------------------
+        job.current_stage = "preprocessing"
+        db.commit()
+
+        perf_monitor.start_stage("preprocessing")
+        preprocessed_dir = os.path.join(settings.RESULTS_DIR, f"job_{job_id}_preprocessed")
+        pre_result = preprocessor.preprocess(input_path, output_dir=preprocessed_dir)
+        perf_monitor.end_stage("preprocessing")
+
+        # Use the preprocessed directory as input to Meshroom
+        effective_input = pre_result.output_dir
+
+        # Update analysis image count to reflect deduplicated set
+        analysis.image_count = pre_result.processed_count
+
+        if pre_result.warnings:
+            existing = job.input_analysis or {}
+            existing["preprocessing_warnings"] = pre_result.warnings
+            job.input_analysis = existing
+
+        job.input_analysis = {
+            **job.input_analysis,
+            "preprocessing": {
+                "original_count": pre_result.original_count,
+                "processed_count": pre_result.processed_count,
+                "removed_duplicates": pre_result.removed_duplicates,
+                "removed_blurry": pre_result.removed_blurry,
+                "rotated": pre_result.rotated,
+                "resized": pre_result.resized,
+            },
+        }
+        db.commit()
+
+        # ----------------------------------------------------------------
         # 2. Cache Check
         # ----------------------------------------------------------------
-        image_hash = cache_mgr.compute_input_hash(input_path)
+        image_hash = cache_mgr.compute_input_hash(effective_input)
 
         # ----------------------------------------------------------------
         # 3. Parameter Selection
@@ -121,6 +185,9 @@ def run_meshroom_job(self, job_id: int, input_path: str):
             retry_context = {"failure_type": job.failure_type}
 
         params = param_optimizer.select_parameters(analysis, retry_context=retry_context)
+
+        # Log quality settings for visibility
+        quality_summary = pipeline_builder.get_quality_summary(params)
         job.meshroom_parameters = {
             "preset": params.preset,
             "feature_density": params.feature_density,
@@ -129,6 +196,7 @@ def run_meshroom_job(self, job_id: int, input_path: str):
             "mesh_quality": params.mesh_quality,
             "texture_resolution": params.texture_resolution,
             "use_gpu": params.use_gpu,
+            "quality_summary": quality_summary,
         }
         db.commit()
 
@@ -149,7 +217,7 @@ def run_meshroom_job(self, job_id: int, input_path: str):
         timeout_config = timeout_mgr.calculate_timeout(analysis)
 
         # ----------------------------------------------------------------
-        # 6. Run Meshroom
+        # 6. Run Meshroom with full quality parameters
         # ----------------------------------------------------------------
         job.status = "processing"
         db.commit()
@@ -157,29 +225,46 @@ def run_meshroom_job(self, job_id: int, input_path: str):
         output_dir = os.path.join(settings.RESULTS_DIR, f"job_{job_id}")
         os.makedirs(output_dir, exist_ok=True)
 
+        # Meshroom cache dir for stage resumption
+        meshroom_cache_dir = os.path.join(settings.CACHE_DIR, "meshroom", image_hash[:16])
+
         if not os.path.exists(settings.MESHROOM_PATH):
             job.status = "failed"
             job.failure_type = "system_error"
             db.commit()
             return {"error": f"Meshroom executable not found at {settings.MESHROOM_PATH}"}
 
-        meshroom_cmd = [
-            settings.MESHROOM_PATH,
-            "--input", input_path,
-            "--output", output_dir,
-            "--downscale", str(params.downscale_factor),
-        ]
+        # Build optimized command via pipeline builder — passes all quality
+        # parameters including feature density, depth map quality, mesh settings
+        meshroom_cmd = pipeline_builder.build_command(
+            meshroom_path=settings.MESHROOM_PATH,
+            input_path=effective_input,
+            output_dir=output_dir,
+            params=params,
+            cache_dir=meshroom_cache_dir,
+        )
 
         progress_tracker = ProgressTracker(job_id)
         perf_monitor.start_stage("meshroom_processing")
 
+        # Use separate stderr pipe so we can capture error output accurately
         process = subprocess.Popen(
             meshroom_cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             env=_build_meshroom_env(gpu_config),
         )
+
+        # Collect stderr in a background thread while stdout drives progress
+        stderr_lines: list = []
+
+        def _collect_stderr_thread():
+            for line in iter(process.stderr.readline, ""):
+                stderr_lines.append(line.rstrip())
+
+        stderr_thread = threading.Thread(target=_collect_stderr_thread, daemon=True)
+        stderr_thread.start()
 
         progress_thread = threading.Thread(
             target=_monitor_progress,
@@ -199,10 +284,13 @@ def run_meshroom_job(self, job_id: int, input_path: str):
             raise self.retry(countdown=settings.RETRY_DELAY_SECONDS)
 
         progress_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
         perf_monitor.end_stage("meshroom_processing")
 
+        # Capture actual error output for diagnosis
+        error_output = "\n".join(stderr_lines)
+
         if process.returncode != 0:
-            error_output = ""
             failure_type = error_handler.categorize_error(error_output)
             job.status = "failed"
             job.failure_type = failure_type
@@ -210,6 +298,7 @@ def run_meshroom_job(self, job_id: int, input_path: str):
                 failure_type=failure_type,
                 error_message="Meshroom processing failed",
                 retry_count=self.request.retries,
+                raw_error_output=error_output[-4000:],  # last 4KB of stderr
             ).__dict__
             db.commit()
 
@@ -331,6 +420,12 @@ def run_meshroom_job(self, job_id: int, input_path: str):
         return {"error": str(e)}
     finally:
         db.close()
+        # Clean up preprocessed image directory to free disk space
+        if preprocessed_dir and os.path.isdir(preprocessed_dir):
+            try:
+                shutil.rmtree(preprocessed_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 @celery_app.task

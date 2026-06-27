@@ -12,13 +12,14 @@ import NotFound from "./pages/not-found";
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 
-// Lazy load the 3D Analysis component as it might be heavy
-const Analysis3D = lazy(() => import("./pages/Analysis3D"));
-const Settings = lazy(() => import("./pages/Settings"));
-const ThreeDView = lazy(() => import("./pages/ThreeDView"));
-const Reconstruction = lazy(() => import("./components/3DReconstruction"));
+// Lazy-load heavy pages
+const Analysis3D       = lazy(() => import("./pages/Analysis3D"));
+const Settings         = lazy(() => import("./pages/Settings"));
+const ThreeDView       = lazy(() => import("./pages/ThreeDView"));
+const Reconstruction   = lazy(() => import("./components/3DReconstruction"));
+const AccuracyDashboard = lazy(() => import("./pages/AccuracyDashboard"));
+const ProjectViewer    = lazy(() => import("./pages/ProjectViewer"));
 
-// Loading fallback
 const PageLoader = () => (
   <div className="flex items-center justify-center h-full">
     <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -37,15 +38,17 @@ export default function App() {
             <div className="flex-1 p-6 overflow-auto">
               <Suspense fallback={<PageLoader />}>
                 <Switch>
-                  <Route path="/" component={Dashboard} />
-                  <Route path="/projects" component={Projects} />
-                  <Route path="/mesh-analysis" component={Analysis3D} />
-                  <Route path="/3d-view" component={ThreeDView} />
-                  <Route path="/reconstruct" component={Reconstruction} />
-                  <Route path="/analytics" component={Analytics} />
-                  <Route path="/reports" component={Reports} />
-                  <Route path="/settings" component={Settings} />
-                  <Route component={NotFound} />
+                  <Route path="/"                component={Dashboard} />
+                  <Route path="/projects"        component={Projects} />
+                  <Route path="/project-view/:id" component={ProjectViewer} />
+                  <Route path="/reconstruct"     component={Reconstruction} />
+                  <Route path="/mesh-analysis"   component={Analysis3D} />
+                  <Route path="/3d-view"         component={ThreeDView} />
+                  <Route path="/accuracy"        component={AccuracyDashboard} />
+                  <Route path="/analytics"       component={Analytics} />
+                  <Route path="/reports"         component={Reports} />
+                  <Route path="/settings"        component={Settings} />
+                  <Route                         component={NotFound} />
                 </Switch>
               </Suspense>
             </div>

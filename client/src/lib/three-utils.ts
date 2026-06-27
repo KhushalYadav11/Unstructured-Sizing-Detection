@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
 export type ModelMetrics = {
@@ -40,6 +41,23 @@ export async function loadObjectFromFile(file: File): Promise<THREE.Object3D> {
     const text = await file.text();
     const loader = new OBJLoader();
     const obj = loader.parse(text);
+
+    // If the user also dropped / selected an MTL file alongside the OBJ,
+    // it will be in the same FileList. We can't do async MTL loading from a
+    // File object here (no URL), but we apply a good default material so the
+    // mesh at least looks like coal rather than plain white/grey.
+    obj.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && (!mesh.material ||
+          (mesh.material as THREE.MeshBasicMaterial).color?.getHex() === 0xffffff)) {
+        mesh.material = new THREE.MeshStandardMaterial({
+          color: 0x5a4f3e,
+          roughness: 0.85,
+          metalness: 0.05,
+        });
+      }
+    });
+
     return obj;
   }
 

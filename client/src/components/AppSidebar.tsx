@@ -1,4 +1,4 @@
-import { Home, FolderOpen, BarChart3, FileText, Settings, Box, User } from "lucide-react";
+import { Home, FolderOpen, BarChart3, FileText, Settings, Box, User, ScanLine, Target } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -14,12 +14,14 @@ import { Link, useLocation } from "wouter";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const menuItems = [
-  { title: "Dashboard", url: "/", icon: Home },
-  { title: "Projects", url: "/projects", icon: FolderOpen },
-  { title: "3D Analysis", url: "/mesh-analysis", icon: Box },
-  { title: "Analytics", url: "/analytics", icon: BarChart3 },
-  { title: "Reports", url: "/reports", icon: FileText },
-  { title: "Settings", url: "/settings", icon: Settings },
+  { title: "Dashboard",        url: "/",            icon: Home },
+  { title: "Projects",         url: "/projects",    icon: FolderOpen },
+  { title: "3D Reconstruction",url: "/reconstruct", icon: ScanLine },
+  { title: "3D Analysis",      url: "/mesh-analysis",icon: Box },
+  { title: "Accuracy Centre",  url: "/accuracy",    icon: Target },
+  { title: "Analytics",        url: "/analytics",   icon: BarChart3 },
+  { title: "Reports",          url: "/reports",     icon: FileText },
+  { title: "Settings",         url: "/settings",    icon: Settings },
 ];
 
 export function AppSidebar() {

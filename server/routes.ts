@@ -12,6 +12,7 @@ import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import ExifParserFactory from "exif-parser";
 import { eventBroadcaster } from "./events";
+import { checkNodeOdmHealth } from "./nodeodm-client";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Projects
@@ -849,7 +850,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Process mesh by public uploads URL
   app.post("/api/mesh/process-by-url", async (req, res) => {
     try {
-      const { meshUrl, coalType = "bituminous" } = req.body as { meshUrl?: string; coalType?: string };
+      const {
+        meshUrl,
+        coalType = "bituminous",
+        scaleFactor,          // optional: metres per mesh unit (computed from known-distance calibration)
+        knownLengthMeshUnits, // optional: measured length in mesh units
+        knownLengthMeters,    // optional: real-world length in metres → derive scaleFactor from these two
+      } = req.body as {
+        meshUrl?: string;
+        coalType?: string;
+        scaleFactor?: number;
+        knownLengthMeshUnits?: number;
+        knownLengthMeters?: number;
+      };
+
       if (!meshUrl || typeof meshUrl !== "string") {
         return res.status(400).json({ error: "meshUrl is required" });
       }
@@ -870,11 +884,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Mesh file not found" });
       }
 
-      const result = await meshProcessor.processObjFile(absPath, coalType);
+      // Resolve effective scale factor
+      let effectiveScale = typeof scaleFactor === "number" && scaleFactor > 0 ? scaleFactor : 1.0;
+      if (
+        typeof knownLengthMeshUnits === "number" && knownLengthMeshUnits > 0 &&
+        typeof knownLengthMeters === "number" && knownLengthMeters > 0
+      ) {
+        effectiveScale = knownLengthMeters / knownLengthMeshUnits;
+      }
+
+      const result = await meshProcessor.processObjFile(absPath, coalType, effectiveScale);
 
       res.json({
         meshUrl,
         coalType,
+        scaleFactor: effectiveScale,
+        scaleApplied: effectiveScale !== 1.0,
         ...result,
       });
     } catch (error) {
@@ -990,22 +1015,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/reconstruct", photoUpload.array("images", 50), async (req, res) => {
     try {
       const files = req.files as Express.Multer.File[];
-      const { projectId } = req.body;
+      const { projectId, projectName } = req.body;
 
       if (!files || files.length === 0) {
         return res.status(400).json({ message: "No images uploaded" });
       }
 
-      let effectiveProjectId = projectId as string | undefined;
-      if (!effectiveProjectId) {
-        const created = await storage.createProject({ name: "Untitled", status: "draft" });
-        effectiveProjectId = created.id;
+      // ── NodeODM health check ─────────────────────────────────────────────
+      const nodeOdmAvailable = await checkNodeOdmHealth();
+      if (!nodeOdmAvailable) {
+        for (const file of files) cleanupFile(file.path);
+        return res.status(503).json({
+          error: "NodeODM unavailable",
+          message: "The 3D reconstruction engine (NodeODM / OpenDroneMap) is not running.",
+          setupCommand: "docker run -d -p 3000:3000 opendronemap/nodeodm",
+          help: "Start Docker Desktop, then run the command above. NodeODM will be ready at http://localhost:3000.",
+        });
       }
 
-      const existingProject = await storage.getProject(effectiveProjectId);
-      if (!existingProject) {
-        const created = await storage.createProject({ name: "Untitled", status: "draft" });
+      // Use provided name or generate a timestamped default
+      const name = (typeof projectName === "string" && projectName.trim())
+        ? projectName.trim()
+        : `Reconstruction ${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`;
+
+      let effectiveProjectId = projectId as string | undefined;
+      if (!effectiveProjectId) {
+        const created = await storage.createProject({ name, status: "draft" });
         effectiveProjectId = created.id;
+      } else {
+        const existingProject = await storage.getProject(effectiveProjectId);
+        if (!existingProject) {
+          const created = await storage.createProject({ name, status: "draft" });
+          effectiveProjectId = created.id;
+        } else if (projectName && existingProject.name === "Untitled") {
+          // Update name if it was auto-created as Untitled
+          await storage.updateProject(effectiveProjectId, { name });
+        }
       }
 
       // Validate file count
@@ -1106,6 +1151,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
         (req.files as Express.Multer.File[]).forEach(f => cleanupFile(f.path));
       }
       res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // ── Scale Calibration ─────────────────────────────────────────────────────
+  app.post("/api/mesh/calibrate-scale", async (req, res) => {
+    try {
+      const { pointA, pointB, realWorldDistanceMeters } = req.body;
+      if (!pointA || !pointB || !realWorldDistanceMeters) {
+        return res.status(400).json({ error: "pointA, pointB and realWorldDistanceMeters are required" });
+      }
+      const { computeScaleFactor } = await import("./scale-calibration.js");
+      const result = computeScaleFactor({ pointA, pointB, realWorldDistanceMeters });
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ error: "Calibration failed", details: String(err) });
+    }
+  });
+
+  // ── Accuracy Estimate ─────────────────────────────────────────────────────
+  app.post("/api/mesh/accuracy-estimate", async (req, res) => {
+    try {
+      const { imageCount = 50, hasGps = false, hasManualCalibration = false, featureQuality = "ultra" } = req.body;
+      const { estimateAccuracy } = await import("./scale-calibration.js");
+      const result = estimateAccuracy(imageCount, hasGps, hasManualCalibration, featureQuality);
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ error: "Accuracy estimate failed", details: String(err) });
+    }
+  });
+
+  // ── GLB/GLTF Export ────────────────────────────────────────────────────────
+  // Converts an OBJ file (by uploads URL) to GLB using three.js headless
+  app.post("/api/mesh/export-glb", async (req, res) => {
+    try {
+      const { meshUrl } = req.body as { meshUrl?: string };
+      if (!meshUrl) return res.status(400).json({ error: "meshUrl is required" });
+
+      let absPath: string;
+      if (meshUrl.startsWith("/uploads/")) {
+        absPath = path.join(process.cwd(), "uploads", meshUrl.replace(/^\/uploads[\/\\]?/, ""));
+      } else {
+        return res.status(400).json({ error: "Unsupported meshUrl format" });
+      }
+
+      if (!fs.existsSync(absPath)) {
+        return res.status(404).json({ error: "Mesh file not found" });
+      }
+
+      // Lazy-import three.js server-side (no canvas needed for GLTFExporter logic)
+      const THREE_SERVER = await import("three");
+      const { OBJLoader: OBJLoaderServer } = await import("three/examples/jsm/loaders/OBJLoader.js" as any);
+      const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js" as any);
+
+      const objText = fs.readFileSync(absPath, "utf-8");
+      const loader = new OBJLoaderServer();
+      const scene = loader.parse(objText);
+
+      const exporter = new GLTFExporter();
+      const glbBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        exporter.parse(
+          scene,
+          (result: any) => {
+            if (result instanceof ArrayBuffer) resolve(result);
+            else reject(new Error("GLTFExporter returned JSON instead of binary — use binary:true"));
+          },
+          (err: any) => reject(err),
+          { binary: true }
+        );
+      });
+
+      const glbFilename = path.basename(absPath, ".obj") + ".glb";
+      res.setHeader("Content-Type", "model/gltf-binary");
+      res.setHeader("Content-Disposition", `attachment; filename="${glbFilename}"`);
+      res.send(Buffer.from(glbBuffer));
+    } catch (err) {
+      console.error("GLB export failed:", err);
+      res.status(500).json({ error: "GLB export failed", details: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Mesh quality endpoint ─────────────────────────────────────────────────
+  // Returns basic mesh quality stats (watertight, vertices, faces, surface area)
+  app.post("/api/mesh/quality", async (req, res) => {
+    try {
+      const { meshUrl } = req.body as { meshUrl?: string };
+      if (!meshUrl) return res.status(400).json({ error: "meshUrl is required" });
+
+      let absPath: string;
+      if (meshUrl.startsWith("/uploads/")) {
+        absPath = path.join(process.cwd(), "uploads", meshUrl.replace(/^\/uploads[\/\\]?/, ""));
+      } else {
+        return res.status(400).json({ error: "Unsupported meshUrl format" });
+      }
+
+      if (!fs.existsSync(absPath)) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      const result = await meshProcessor.processObjFile(absPath);
+      const isWatertight = result.volume > 0 && result.faces > 0;
+
+      // Simple quality score based on vertex/face count and whether volume resolved
+      let qualityScore = 50;
+      if (result.vertices > 50000) qualityScore += 15;
+      if (result.vertices > 200000) qualityScore += 10;
+      if (isWatertight) qualityScore += 20;
+      if (result.faces > 100000) qualityScore += 5;
+      qualityScore = Math.min(100, qualityScore);
+
+      res.json({
+        vertices: result.vertices,
+        faces: result.faces,
+        surfaceArea: result.surfaceArea,
+        isWatertight,
+        qualityScore,
+        qualityLabel: qualityScore >= 80 ? "excellent" : qualityScore >= 60 ? "good" : qualityScore >= 40 ? "fair" : "poor",
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Quality check failed" });
     }
   });
 

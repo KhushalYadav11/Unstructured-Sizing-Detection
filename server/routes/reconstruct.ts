@@ -5,6 +5,7 @@ import fs from "fs";
 import { photogrammetryWorker } from "../worker";
 import { storage } from "../storage";
 import { validateImages, formatValidationReport } from "../image-validator";
+import { checkNodeOdmHealth } from "../nodeodm-client";
 
 const router = express.Router();
 
@@ -14,6 +15,20 @@ if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
 const upload = multer({ dest: tempDir });
 
+// ── System status endpoint ─────────────────────────────────────────────────
+// Called by the UI on page load so it can show a setup banner early.
+router.get("/api/system/status", async (_req, res) => {
+  const nodeOdmUrl = process.env.NODE_ODM_URL || "http://localhost:3000";
+  const nodeOdmHealthy = await checkNodeOdmHealth();
+  res.json({
+    nodeOdm: {
+      url: nodeOdmUrl,
+      healthy: nodeOdmHealthy,
+      setupCommand: "docker run -d -p 3000:3000 opendronemap/nodeodm",
+    },
+  });
+});
+
 // Start reconstruction: accepts field "projectId" (optional) and many "images"
 router.post("/api/reconstruct", upload.array("images", 200), async (req, res) => {
   try {
@@ -22,6 +37,21 @@ router.post("/api/reconstruct", upload.array("images", 200), async (req, res) =>
 
     if (!files.length) {
       return res.status(400).json({ error: "No images uploaded" });
+    }
+
+    // Check NodeODM availability BEFORE doing any work
+    const nodeOdmHealthy = await checkNodeOdmHealth();
+    if (!nodeOdmHealthy) {
+      // Clean up uploaded temp files
+      for (const f of files) {
+        try { fs.unlinkSync(f.path); } catch {}
+      }
+      return res.status(503).json({
+        error: "NodeODM is not available",
+        details: "The 3D reconstruction engine (NodeODM) is not running.",
+        setupCommand: "docker run -d -p 3000:3000 opendronemap/nodeodm",
+        help: "Install Docker, then run the command above to start NodeODM. It will be available at http://localhost:3000.",
+      });
     }
 
     const savedPaths = files.map(f => f.path);
@@ -45,7 +75,7 @@ router.post("/api/reconstruct", upload.array("images", 200), async (req, res) =>
       console.warn("[reconstruct] Image validation warnings:\n" + formatValidationReport(validation));
     }
 
-    // startMeshroomJob returns jobId immediately and runs Meshroom in background
+    // startMeshroomJob returns jobId immediately and runs NodeODM in background
     const jobId = await photogrammetryWorker.startMeshroomJob(projectId, savedPaths);
 
     return res.status(202).json({ 
@@ -79,6 +109,7 @@ router.get("/api/reconstruct/:jobId", async (req, res) => {
       progress: reconState.progress,
       currentStep: reconState.currentStep,
       artifacts: reconState.artifacts,
+      thumbnailUrl: (reconState.artifacts as any)?.orthophoto?.url ?? null,
     };
     
     return res.json({ job: jobWithProgress });

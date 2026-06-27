@@ -100,10 +100,22 @@ export async function saveMeasurement(measurementId: string, projectId: string):
 
 /**
  * Process a mesh that is already accessible by URL under `/uploads` or `/api/mesh/files/:id`.
+ * Pass `knownLengthMeters` + `knownLengthMeshUnits` (measured in the viewer) to calibrate scale,
+ * or pass a pre-computed `scaleFactor` directly.
  */
-export async function processMeshByUrl(meshUrl: string, coalType?: string): Promise<{
+export async function processMeshByUrl(
+  meshUrl: string,
+  coalType?: string,
+  scaleOptions?: {
+    scaleFactor?: number;
+    knownLengthMeshUnits?: number;
+    knownLengthMeters?: number;
+  }
+): Promise<{
   meshUrl: string;
   coalType: string;
+  scaleFactor: number;
+  scaleApplied: boolean;
   volume: number;
   weight: number;
   vertices: number;
@@ -115,7 +127,7 @@ export async function processMeshByUrl(meshUrl: string, coalType?: string): Prom
   const response = await fetch(`${API_BASE}/mesh/process-by-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ meshUrl, coalType }),
+    body: JSON.stringify({ meshUrl, coalType, ...scaleOptions }),
   });
 
   if (!response.ok) {

@@ -1,7 +1,7 @@
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Folder, Calendar, TrendingUp, MoreVertical, Box, Ruler } from "lucide-react";
+import { Folder, Calendar, TrendingUp, MoreVertical, Box, Ruler, ScanLine } from "lucide-react";
 
 interface ProjectCardProps {
   id: string;
@@ -16,6 +16,8 @@ interface ProjectCardProps {
   length?: number;
   width?: number;
   height?: number;
+  thumbnailUrl?: string | null;
+  reconstructionStatus?: string;
 }
 
 const statusConfig = {
@@ -37,15 +39,34 @@ export function ProjectCard({
   length,
   width,
   height,
+  thumbnailUrl,
+  reconstructionStatus,
 }: ProjectCardProps) {
   const hasDimensions = length !== undefined && width !== undefined && height !== undefined;
-  
+  const hasReconstruction = reconstructionStatus === "ready";
+
   return (
     <Card
-      className="transition-shadow hover:shadow-md cursor-pointer"
+      className="transition-shadow hover:shadow-md cursor-pointer overflow-hidden"
       onClick={onClick}
       data-testid={`card-project-${name.toLowerCase().replace(/\s+/g, "-")}`}
     >
+      {/* Thumbnail strip */}
+      {thumbnailUrl ? (
+        <div className="h-36 w-full overflow-hidden bg-muted">
+          <img
+            src={thumbnailUrl}
+            alt={`${name} preview`}
+            className="w-full h-full object-cover"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          />
+        </div>
+      ) : hasReconstruction ? (
+        <div className="h-36 w-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+          <ScanLine className="h-10 w-10 text-primary/40" />
+        </div>
+      ) : null}
+
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-3">
         <div className="flex items-center gap-3 min-w-0">
           <div className="h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center flex-shrink-0">
@@ -69,7 +90,6 @@ export function ProjectCard({
           className="flex-shrink-0"
           onClick={(e) => {
             e.stopPropagation();
-            console.log("Project menu clicked");
           }}
           data-testid="button-project-menu"
         >
@@ -89,7 +109,7 @@ export function ProjectCard({
             <span data-testid="text-measurement-count">{measurements} measurements</span>
           </div>
         </div>
-        
+
         {hasDimensions && (
           <div className="space-y-2 pt-2 border-t">
             <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
@@ -118,10 +138,10 @@ export function ProjectCard({
             </div>
           </div>
         )}
-        
+
         {(volume || weight) && (
           <div className="grid grid-cols-2 gap-3 pt-2 border-t">
-            {volume && (
+            {volume !== undefined && (
               <div>
                 <div className="text-xs text-muted-foreground">Volume</div>
                 <div className="font-mono font-semibold" data-testid="text-project-volume">
@@ -129,7 +149,7 @@ export function ProjectCard({
                 </div>
               </div>
             )}
-            {weight && (
+            {weight !== undefined && (
               <div>
                 <div className="text-xs text-muted-foreground">Weight</div>
                 <div className="font-mono font-semibold" data-testid="text-project-weight">
@@ -146,13 +166,13 @@ export function ProjectCard({
           <span data-testid="text-last-updated">Updated {lastUpdated}</span>
         </div>
         {has3DModels && (
-          <Button 
-            size="sm" 
+          <Button
+            size="sm"
             variant="outline"
             className="text-xs"
             onClick={(e) => {
               e.stopPropagation();
-              window.location.href = `/mesh-analysis?project=${id}`;
+              window.location.href = `/project-view/${id}`;
             }}
           >
             <Box className="h-3 w-3 mr-1" />

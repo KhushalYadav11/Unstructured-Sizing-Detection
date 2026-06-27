@@ -29,6 +29,19 @@ export interface OdmTaskOptions {
   texturingNaiveBayes?: boolean;
   meshOctreeDepth?: number;
   useOpensfm?: boolean;
+  // Coal-pile specific improvements
+  depthMapsMethod?: "sgm" | "patch-match-and-sgm";
+  pcFiltering?: number;
+  smRobusting?: number;
+  ignoreGSD?: boolean;
+  radiusNeighbors?: number;
+  optimizeIntrinsics?: boolean;
+  gpsAccuracy?: number;
+  // No-GPS options
+  use3dmesh?: boolean;       // Use 3D mesh pipeline instead of 2.5D DSM
+  pcGeometric?: boolean;     // Enable geometric consistency for point cloud
+  optimizeDiskSpace?: boolean;
+  cudaDevice?: number;       // GPU device index for CUDA acceleration (-1 = CPU, 0 = first GPU)
 }
 
 export interface OdmTaskInfo {
@@ -153,6 +166,16 @@ export async function createOdmTask(
   if (options.useOpensfm !== undefined) {
     odmOptions.push({ name: "use-opensfm", value: options.useOpensfm });
   }
+  // Coal-pile accuracy enhancements
+  if (options.depthMapsMethod)          odmOptions.push({ name: "depthmap-method",    value: options.depthMapsMethod });
+  if (options.pcFiltering !== undefined) odmOptions.push({ name: "pc-filter",          value: options.pcFiltering });
+  if (options.ignoreGSD)                odmOptions.push({ name: "ignore-gsd",          value: true });
+  if (options.optimizeIntrinsics)       odmOptions.push({ name: "camera-lens",         value: "auto" });
+  if (options.gpsAccuracy !== undefined) odmOptions.push({ name: "gps-accuracy",       value: options.gpsAccuracy });
+  if (options.use3dmesh)                odmOptions.push({ name: "use-3dmesh",          value: true });
+  if (options.pcGeometric)              odmOptions.push({ name: "pc-geometric",        value: true });
+  if (options.optimizeDiskSpace)        odmOptions.push({ name: "optimize-disk-space", value: true });
+  if (options.cudaDevice !== undefined) odmOptions.push({ name: "cuda-device",         value: options.cudaDevice });
 
   form.append("options", JSON.stringify(odmOptions));
   if (taskName) form.append("name", taskName);

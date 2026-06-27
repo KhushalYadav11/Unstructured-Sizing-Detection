@@ -18,60 +18,33 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Rate limiting
-const rateLimit = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT = 100; // requests per window
-const RATE_WINDOW = 15 * 60 * 1000; // 15 minutes in milliseconds
-const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour in milliseconds
-
-app.use((req, res, next) => {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
-  const clientData = rateLimit.get(ip) || { count: 0, resetTime: now + RATE_WINDOW };
-
-  // Reset counter if window has expired
-  if (now > clientData.resetTime) {
-    clientData.count = 0;
-    clientData.resetTime = now + RATE_WINDOW;
-  }
-
-  if (clientData.count >= RATE_LIMIT) {
-    return res.status(429).json({
-      error: 'Too many requests',
-      retryAfter: Math.ceil((clientData.resetTime - now) / 1000)
-    });
-  }
-
-  clientData.count++;
-  rateLimit.set(ip, clientData);
-
-  // Cleanup old upload files periodically
-  if (!(global as any).cleanup) {
-    (global as any).cleanup = setInterval(() => {
-      const uploadPath = path.join(__dirname, "../uploads");
-      fs.readdir(uploadPath, (err, files) => {
-        if (err) return;
-        const now = Date.now();
-        files.forEach(file => {
-          const filePath = path.join(uploadPath, file);
-          fs.stat(filePath, (err, stats) => {
-            if (err) return;
-            // Remove files older than 24 hours
-            if (now - stats.mtimeMs > 24 * 60 * 60 * 1000) {
-              fs.unlink(filePath, () => {});
-            }
-          });
+// Periodic cleanup of old upload files
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+if (!(global as any).cleanup) {
+  (global as any).cleanup = setInterval(() => {
+    const uploadPath = path.join(__dirname, "../uploads");
+    fs.readdir(uploadPath, (err, files) => {
+      if (err) return;
+      const now = Date.now();
+      files.forEach(file => {
+        const filePath = path.join(uploadPath, file);
+        fs.stat(filePath, (err, stats) => {
+          if (err) return;
+          if (now - stats.mtimeMs > 24 * 60 * 60 * 1000) {
+            fs.unlink(filePath, () => {});
+          }
         });
       });
-    }, CLEANUP_INTERVAL);
-  }
+    });
+  }, CLEANUP_INTERVAL);
+}
 
+app.use((req, res, next) => {
   // Set security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
   next();
 });
 
@@ -100,12 +73,12 @@ app.use('/uploads', express.static(uploadsDir));
 // Basic rate limiting (in production, use redis-based rate limiting)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const isDevelopment = process.env.NODE_ENV === 'development';
-const RATE_LIMIT_WINDOW = isDevelopment ? 1 * 60 * 1000 : 15 * 60 * 1000; // 1 minute in dev, 15 minutes in prod
-const RATE_LIMIT_MAX_REQUESTS = isDevelopment ? 1000 : 100; // 1000 requests in dev, 100 in prod
+const RATE_LIMIT_WINDOW = isDevelopment ? 15 * 60 * 1000 : 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX_REQUESTS = isDevelopment ? 10000 : 500; // generous limits
 
 app.use((req, res, next) => {
-  // Skip rate limiting for static assets in development
-  if (isDevelopment && (req.path.includes('.') || req.path.startsWith('/src/') || req.path.startsWith('/@'))) {
+  // Skip rate limiting for static assets and Vite HMR
+  if (req.path.includes('.') || req.path.startsWith('/src/') || req.path.startsWith('/@') || req.path.startsWith('/node_modules/')) {
     return next();
   }
   

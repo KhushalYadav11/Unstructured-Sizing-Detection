@@ -61,3 +61,5 @@ overview
 # Keep backend/migrations/ if you want to track schema migrations
 # Uncomment the next line to exclude them:
 # backend/migrations/
+backend/.env
+backend/.env

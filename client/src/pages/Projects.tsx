@@ -126,6 +126,12 @@ function ProjectCardWithStats({
   // Check if project has 3D models
   const has3DModels = project.meshFileName !== null;
 
+  // Derive thumbnail: use orthophoto from reconstruction artifacts if available
+  const thumbnailUrl: string | null =
+    (project.reconstructionArtifacts as any)?.orthophoto?.url ??
+    (project.reconstructionArtifacts as any)?.textures?.[0]?.url ??
+    null;
+
   return (
     <ProjectCard
       id={project.id}
@@ -139,6 +145,8 @@ function ProjectCardWithStats({
       length={project.length}
       width={project.width}
       height={project.height}
+      thumbnailUrl={thumbnailUrl}
+      reconstructionStatus={project.reconstructionStatus}
       onClick={onClick}
     />
   );
